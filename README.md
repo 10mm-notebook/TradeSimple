@@ -399,7 +399,7 @@ workflow.add_conditional_edges(
 )
 ```
 
-### 2. ReAct Pattern (진짜 ReAct)
+### 2. ReAct Pattern
 
 LLM이 **스스로 도구를 선택**하고 실행하는 자율적 패턴입니다.
 
