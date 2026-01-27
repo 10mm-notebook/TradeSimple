@@ -1,0 +1,58 @@
+# .dockerignore - Docker 빌드 시 제외할 파일
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git 
+.git/
+.gitignore
+
+# 테스트
+tests/
+pytest_cache/
+.coverage
+htmlcov/
+
+# 문서
+*.md
+!README.md
+docs/
+
+# 환경 변수 (컨테이너 실행 시 주입)
+.env
+.env.local
+.env.*.local
+
+# 로그
+*.log
+logs/
+
+# 임시 파일
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# 보고서 출력 (런타임에 생성)
+report.pdf
+report.docx
+report.xlsx
+reports/
+
+# 캐시
+.cache/
+*.cache
