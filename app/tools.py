@@ -25,21 +25,31 @@ load_dotenv()
 # --- CSV 파일을 미리 로드하여 메모리에 저장 ---
 TARIFF_DF = None
 try:
-    TARIFF_DF = pd.read_csv("./data/tariff_by_hs.csv", encoding='cp949', dtype={'세번': str, '잠정세율': str})
+    TARIFF_DF = pd.read_csv("./data/tariff_by_hs.csv", encoding="cp949", dtype={"세번": str, "잠정세율": str})
     print("tariff_by_hs.csv 파일을 성공적으로 로드했습니다.")
 except FileNotFoundError:
     print("경고: ./data/tariff_by_hs.csv 파일을 찾을 수 없습니다.")
 
 
-# --- Retriever 초기화 (Lazy Loading) ---
+# --- Retriever 및 HS/관세 도구 호출 제한 (Lazy Loading + Rate Limit) ---
 _retriever = None
+_hs_code_search_call_count = 0
+_tariff_search_call_count = 0
+
+
+def reset_hs_code_search_limit() -> None:
+    """HS 코드/관세 검색 도구 호출 카운터를 리셋 (에이전트 1회 실행 전 호출)."""
+    global _hs_code_search_call_count, _tariff_search_call_count
+    _hs_code_search_call_count = 0
+    _tariff_search_call_count = 0
+
 
 def get_retriever():
     """저장된 FAISS 인덱스로부터 Retriever를 생성 (Lazy Loading)"""
     global _retriever
     if _retriever is not None:
         return _retriever
-    
+
     vs_path = "./vector_store/faiss_index"
     if not os.path.exists(vs_path):
         raise FileNotFoundError("Vector store not found. Please run 'run_preprocessing.py' first.")
@@ -56,19 +66,51 @@ def get_retriever():
 def hs_code_search(query: str) -> str:
     """
     사용자가 입력한 상품 설명(query)을 바탕으로 관련 HS 코드 정보와 품명 규격 가이드를 검색합니다.
-    
+
     Args:
         query: 검색할 상품 설명 (예: "냉동 참치", "스마트워치", "노트북 컴퓨터")
-    
+
     Returns:
         검색된 HS 코드 관련 정보 문자열 (예상 HS 코드, 품명, 관련 규정 포함)
     """
-    print(f"[Tool] hs_code_search 실행: query={query}")
+    from textwrap import shorten
+
+    global _hs_code_search_call_count
+    _hs_code_search_call_count += 1
+
+    print(f"[Tool] hs_code_search 실행: call={_hs_code_search_call_count}, query={query}")
+
+    # 하드 리밋: 에이전트 1회 실행당 최대 3회까지만 실제 검색 수행
+    if _hs_code_search_call_count > 3:
+        return (
+            "hs_code_search 도구 호출 제한(3회)을 초과했습니다. "
+            "지금까지의 검색 결과와 관세 규정을 바탕으로 가장 적절한 HS 코드를 선택하고, "
+            "추가 검색 없이 최종 HS 코드와 관세율을 정리해서 답변을 마무리하세요."
+        )
+
+    # 긴 문장은 핵심 키워드 2~3개로 자동 축약 (도메인 검색 팁 반영)
+    # 예: "미국산 냉동 참치를 대형 유통용으로 수입하려고 합니다." -> "냉동 참치"
+    raw = str(query)
+    # 불필요한 조사/표현 일부 제거 (아주 가벼운 휴리스틱)
+    for stop in ["수입하려고", "사용하는", "사용용", "위한", "용도", "대형", "소형"]:
+        raw = raw.replace(stop, " ")
+
+    tokens = raw.replace(",", " ").replace("(", " ").replace(")", " ").split()
+    if len(tokens) > 3:
+        # 한국어/한자/영문 혼합을 고려해 마지막 2~3 단어만 남김
+        core_tokens = tokens[-3:]
+        processed_query = " ".join(core_tokens)
+    else:
+        processed_query = raw.strip() or query
+
+    processed_query_short = shorten(processed_query, width=60, placeholder="...")
+    print(f"[Tool] hs_code_search 실제 검색어: {processed_query_short}")
+
     try:
         retriever = get_retriever()
-        retrieved_docs = retriever.invoke(query)
+        retrieved_docs = retriever.invoke(processed_query)
         if not retrieved_docs:
-            return f"'{query}'에 대한 HS 코드 정보를 찾을 수 없습니다."
+            return f"'{processed_query}'에 대한 HS 코드 정보를 찾을 수 없습니다."
         return "\n\n".join([doc.page_content for doc in retrieved_docs])
     except Exception as e:
         return f"HS 코드 검색 중 오류 발생: {str(e)}"
@@ -100,8 +142,19 @@ def tariff_search_by_hs_code(hs_code: str) -> str:
     Returns:
         관세율 정보 문자열 (기본세율, 잠정세율, WTO 협정세율, 최종 적용 세율, 과세 단위)
     """
-    print(f"[Tool] tariff_search_by_hs_code 실행: hs_code={hs_code}")
-    
+    global _tariff_search_call_count
+    _tariff_search_call_count += 1
+
+    print(f"[Tool] tariff_search_by_hs_code 실행: call={_tariff_search_call_count}, hs_code={hs_code}")
+
+    # 하드 리밋: 에이전트 1회 실행당 최대 5회까지만 상세 관세 조회
+    if _tariff_search_call_count > 5:
+        return (
+            "tariff_search_by_hs_code 도구 호출 제한(5회)을 초과했습니다. "
+            "지금까지 조회한 HS 코드 후보들 중에서 가장 합리적인 세율을 선택하고, "
+            "추가 조회 없이 최종 관세율과 분류 근거를 정리해서 답변을 마무리하세요."
+        )
+
     if TARIFF_DF is None:
         return "오류: 관세율 정보 파일(tariff_by_hs.csv)이 로드되지 않았습니다."
 

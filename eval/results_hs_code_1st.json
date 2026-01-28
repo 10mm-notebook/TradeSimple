@@ -1,0 +1,211 @@
+{
+  "metrics": {
+    "total_cases": 20,
+    "exact_10_matches": 1,
+    "partial_6_matches": 3,
+    "exact_10_accuracy": 0.05,
+    "partial_6_accuracy": 0.15
+  },
+  "results": [
+    {
+      "id": 1,
+      "item_name": "냉동 참치",
+      "description": "일본산 냉동 참치를 대형 수산물 유통용으로 수입하려고 합니다.",
+      "expected_hs": "0303.43-0000",
+      "predicted_hs": "0304.89-9000",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "일본산 냉동 참치는 HS 코드 0304.89-9000으로 분류되며, 이는 기타 어류의 냉동 필레에 해당합니다. 그러나 해당 HS 코드에 대한 관세율 정보는 확인되지 않았습니다."
+    },
+    {
+      "id": 2,
+      "item_name": "냉동 닭고기 날개",
+      "description": "식당용 냉동 닭 날개(윙) 부위, 포장 단위 10kg",
+      "expected_hs": "0207.14-1000",
+      "predicted_hs": "미확인",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "\"식당용 냉동 닭 날개\"는 닭의 부위로, HS 코드 407110000이 닭의 식용 부위에 해당하며, 냉동 상태로 수출입되는 경우에 적합합니다. 관세율은 27%로 확인되었습니다."
+    },
+    {
+      "id": 3,
+      "item_name": "볶은 커피 원두",
+      "description": "카페 납품용으로 사용하는 볶은 아라비카 커피 원두",
+      "expected_hs": "0901.21-0000",
+      "predicted_hs": "미확인",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "볶은 아라비카 커피 원두는 일반적으로 인스턴트 커피의 조제품으로 분류되며, HS 코드 2101111000이 가장 적합합니다. 이 코드는 커피를 기본 재료로 한 조제품을 포함하고 있습니다."
+    },
+    {
+      "id": 4,
+      "item_name": "초콜릿 바",
+      "description": "코코아 함량 40%인 초콜릿 바(개별 포장), 과자류 판매용",
+      "expected_hs": "1806.32-0000",
+      "predicted_hs": "미확인",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "코코아 함량 40%인 초콜릿 바는 초콜릿과 초콜릿 과자에 해당하며, HS 코드 1806311000이 적합합니다. 이 코드는 초콜릿과 초콜릿 과자에 대한 분류로, 개별 포장된 형태의 초콜릿 바에 적합합니다."
+    },
+    {
+      "id": 5,
+      "item_name": "탄산음료",
+      "description": "설탕이 첨가된 레몬맛 탄산음료, 캔(250ml) 포장",
+      "expected_hs": "2202.10-0000",
+      "predicted_hs": "미확인",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "\"설탕이 첨가된 레몬맛 탄산음료\"는 과일 주스 음료로 분류될 수 있으며, HS 코드 2202902000은 과실주스 음료에 해당합니다. 이 코드가 가장 적합하다고 판단되었습니다."
+    },
+    {
+      "id": 6,
+      "item_name": "스마트폰",
+      "description": "5G 지원, 터치스크린 탑재 스마트폰 본체",
+      "expected_hs": "8517.13-0000",
+      "predicted_hs": "미확인",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "이 HS 코드는 \"휴대용 자동자료처리기계\"로, 5G 지원 및 터치스크린을 갖춘 스마트폰 본체와 같은 전자기기를 포함하는 범주에 적합합니다. 스마트폰은 일반적으로 자동 자료 처리 기능을 갖춘 장치로 분류되며, 이 HS 코드가 가장 적합하다고 판단되었습니다."
+    },
+    {
+      "id": 7,
+      "item_name": "스마트워치",
+      "description": "블루투스·와이파이 통신이 가능한 스마트워치, 심박센서 포함",
+      "expected_hs": "8517.62-9090",
+      "predicted_hs": "미확인",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "블루투스 및 와이파이 통신 기능이 있는 스마트워치는 일반적으로 전자기기 및 시계 범주에 포함되며, HS 코드 9102는 시계 및 그 부속품을 포함합니다. 이 코드가 가장 적합하다고 판단됩니다."
+    },
+    {
+      "id": 8,
+      "item_name": "노트북 컴퓨터",
+      "description": "휴대용 노트북 컴퓨터, 15.6인치, SSD 512GB, RAM 16GB",
+      "expected_hs": "8471.30-0000",
+      "predicted_hs": "미확인",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "이 HS 코드는 32비트 이상의 데이터 전송량을 가진 중앙처리장치와 최소 16메가바이트의 주기억용량을 가진 노트북 컴퓨터에 해당합니다. 제공된 물품 설명과 일치하여 적합한 분류로 판단됩니다."
+    },
+    {
+      "id": 9,
+      "item_name": "무선 블루투스 이어폰",
+      "description": "블루투스 무선 통신이 가능한 인이어형 이어폰 세트",
+      "expected_hs": "8517.62-1090",
+      "predicted_hs": "미확인",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "블루투스 무선 통신이 가능한 인이어형 이어폰 세트는 음향 증폭 기능을 갖춘 전자기기로, HS 코드 8518500000 (음향증폭세트)로 분류됩니다. 이 코드는 무선 통신 기능을 포함한 음향 장비에 적합합니다."
+    },
+    {
+      "id": 10,
+      "item_name": "레이저 프린터",
+      "description": "사무용 흑백 레이저 프린터, 네트워크 기능 포함",
+      "expected_hs": "8443.32-1090",
+      "predicted_hs": "8443.32-1010",
+      "exact_10_match": false,
+      "partial_6_match": true,
+      "raw_rationale": "\"사무용 흑백 레이저 프린터\"는 레이저 프린터로 분류되며, HS 코드 8443.32-1010은 네트워크 기능이 포함된 레이저 프린터에 적합합니다. 기본세율은 8%로 확인되었습니다."
+    },
+    {
+      "id": 11,
+      "item_name": "LED 책상 조명",
+      "description": "책상 위에서 사용하는 LED 스탠드 조명기구",
+      "expected_hs": "9405.40-9000",
+      "predicted_hs": "9405.50-0000",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "이 HS 코드는 비전기식 램프와 조명기구에 해당하며, 책상 위에서 사용하는 LED 스탠드 조명기구는 조명기구의 일종으로 적합하게 분류되었습니다."
+    },
+    {
+      "id": 12,
+      "item_name": "남성용 면 티셔츠",
+      "description": "100% 면으로 된 남성용 반팔 니트 티셔츠",
+      "expected_hs": "6109.10-0000",
+      "predicted_hs": "미확인",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "이 HS 코드는 면으로 만든 남성용 반팔 니트 티셔츠에 적합하며, 기본세율이 13%로 설정되어 있습니다. 여러 HS 코드가 검색되었으나, 면으로 만든 티셔츠에 가장 적합한 코드로 선택하였습니다."
+    },
+    {
+      "id": 13,
+      "item_name": "여성용 블라우스",
+      "description": "합성섬유(폴리에스터)로 된 여성용 블라우스",
+      "expected_hs": "6206.40-0000",
+      "predicted_hs": "6206.30-0000",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "합성섬유(폴리에스터)로 제작된 여성용 블라우스는 HS 코드 6206.30-0000에 해당하며, 이 코드는 여성용 의류에 대한 일반적인 분류로 적합합니다. 기본세율은 8%로 설정되어 있습니다."
+    },
+    {
+      "id": 14,
+      "item_name": "운동화",
+      "description": "합성섬유 갑피와 고무 밑창으로 된 운동화",
+      "expected_hs": "6404.11-0000",
+      "predicted_hs": "미확인",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "이 HS 코드는 스포츠용 신발류에 해당하며, 테니스화, 농구화, 체조화, 훈련화와 같은 다양한 운동화 종류를 포함합니다. 사용자가 제공한 \"합성섬유 갑피와 고무 밑창으로 된 운동화\"의 특성과 잘 맞아떨어지기 때문에 이 코드를 선택했습니다."
+    },
+    {
+      "id": 15,
+      "item_name": "사무용 의자",
+      "description": "높이 조절이 가능한 회전식 사무용 의자",
+      "expected_hs": "9401.30-0000",
+      "predicted_hs": "미확인",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "높이 조절이 가능한 회전식 사무용 의자는 사무실에서 사용되는 금속으로 만든 가구에 해당하며, HS 코드 9403100000이 가장 적합합니다. 이 코드는 사무실용 가구를 포함하고 있어 해당 물품의 특성과 잘 맞습니다."
+    },
+    {
+      "id": 16,
+      "item_name": "원목 식탁",
+      "description": "가정용 원목 식탁, 의자 별도",
+      "expected_hs": "9403.60-0000",
+      "predicted_hs": "미확인",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "가정용 원목 식탁과 의자는 일반적으로 가구로 분류되며, HS 코드 9403은 가구 및 그 부분품에 해당합니다. 특히, 9403100000은 금속으로 만든 사무실용 가구에 해당하지만, 가정용 가구와 유사한 특성을 가지고 있습니다."
+    },
+    {
+      "id": 17,
+      "item_name": "플라스틱 저장 용기 세트",
+      "description": "식품 보관용 플라스틱 밀폐 용기 세트",
+      "expected_hs": "3924.10-0000",
+      "predicted_hs": "미확인",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "\"식품 보관용 플라스틱 밀폐 용기 세트\"는 밀폐용기에 해당하며, HS 코드 1602391000이 적합하다고 판단되었습니다. 그러나 관세율 정보는 확인할 수 없었습니다."
+    },
+    {
+      "id": 18,
+      "item_name": "주방용 스테인리스 냄비",
+      "description": "인덕션 겸용 스테인리스 스틸 냄비, 유리 뚜껑 포함",
+      "expected_hs": "7323.93-0000",
+      "predicted_hs": "7324.29-1000",
+      "exact_10_match": false,
+      "partial_6_match": false,
+      "raw_rationale": "이 HS 코드는 스테인리스강으로 만든 조리기구 및 기타 제품에 해당하며, 인덕션 겸용 스테인리스 스틸 냄비와 유리 뚜껑이 포함된 제품에 적합합니다."
+    },
+    {
+      "id": 19,
+      "item_name": "리튬이온 배터리 팩",
+      "description": "휴대용 전자기기용 충전식 리튬이온 배터리 모듈",
+      "expected_hs": "8507.60-0000",
+      "predicted_hs": "8507.60-0000",
+      "exact_10_match": true,
+      "partial_6_match": true,
+      "raw_rationale": "이 HS 코드는 리튬이온 축전지에 해당하며, 사용자가 요청한 휴대용 전자기기용 충전식 리튬이온 배터리 모듈과 가장 적합합니다."
+    },
+    {
+      "id": 20,
+      "item_name": "태블릿 PC",
+      "description": "터치스크린 탑재, 배터리 내장형 태블릿 PC",
+      "expected_hs": "8471.30-1000",
+      "predicted_hs": "8471.30-0000",
+      "exact_10_match": false,
+      "partial_6_match": true,
+      "raw_rationale": "HS 코드 8471.30-0000은 휴대용 자동자료처리기계로, 터치스크린과 배터리를 내장한 태블릿 PC와 같은 제품에 적합합니다. 이 코드는 중앙처리장치, 키보드, 디스플레이를 갖춘 기기를 포함하며, 태블릿 PC의 특성과 잘 맞아떨어집니다. 관세율은 WTO 협정세율이 0%로 적용됩니다."
+    }
+  ]
+}

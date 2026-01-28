@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
-from app.tools import hs_code_search, tariff_search_by_hs_code
+from app.tools import hs_code_search, tariff_search_by_hs_code, reset_hs_code_search_limit
 
 
 # ReAct 에이전트용 시스템 프롬프트
@@ -18,6 +18,13 @@ HS_CODE_FINDER_SYSTEM_PROMPT = """당신은 HS 코드 분류 전문가입니다.
 ## 사용 가능한 도구
 1. **hs_code_search**: 물품 설명으로 HS 코드 정보를 검색합니다.
 2. **tariff_search_by_hs_code**: HS 코드로 관세율을 조회합니다.
+
+## 검색 키워드 규칙 (중요)
+- 사용자가 긴 문장으로 설명하더라도, 실제 도구에 전달하는 검색어는 항상 **아주 짧은 키워드 2개 정도**여야 합니다.
+- 우선순위:
+  1) 한국어 상품명 기준으로 핵심 단어 2개 (예: "미국산 냉동 참치 수입" → "냉동 참치")
+  2) 필요 시 간단한 영문 2단어 키워드를 보조적으로 추가 (예: "냉동 참치" + "frozen tuna")
+- 문장 전체를 그대로 검색어로 쓰지 말고, 기능/용도/재질/형태를 가장 잘 나타내는 2개 정도의 단어만 골라서 사용하세요.
 
 ## 작업 순서
 1. 먼저 hs_code_search 도구로 물품의 HS 코드를 검색하세요.
@@ -82,6 +89,9 @@ class HSCodeFinderAgent:
             }
         """
         print(f"[HSCodeFinderAgent] ReAct 실행 시작: {item_name}")
+
+        # 도구 호출 카운터 리셋 (에이전트 1회 실행당 3회 제한 적용)
+        reset_hs_code_search_limit()
         
         # ReAct 에이전트 실행
         # 시스템 프롬프트를 SystemMessage로 명시적으로 추가
