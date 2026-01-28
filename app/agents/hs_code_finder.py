@@ -30,6 +30,11 @@ HS_CODE_FINDER_SYSTEM_PROMPT = """당신은 HS 코드 분류 전문가입니다.
 - 검색 결과가 없거나 불명확하면, 물품 특성에 기반하여 가장 유사한 분류를 추정하세요.
 - 반드시 관세율까지 조회한 후 응답하세요.
 
+## 도구 호출 제한 (중요)
+- 동일한 검색어로 **hs_code_search 도구를 3회 초과 호출하지 마세요.**
+- 같은 검색어로 3회 호출 후에도 확신이 없으면, 그 안에서 가장 유력한 후보를 선택하고 다음 단계(tariff_search_by_hs_code)로 진행해야 합니다.
+- 불필요하게 같은 도구를 반복 호출하지 말고, 가능한 적은 호출로 최선의 HS 코드를 결정하세요.
+
 ## 최종 응답 형식
 작업이 완료되면 반드시 다음 형식으로 응답하세요:
 
@@ -49,14 +54,16 @@ class HSCodeFinderAgent:
     """
     
     def __init__(self, llm: Optional[ChatOpenAI] = None):
-        self.llm = llm or ChatOpenAI(model="gpt-4o", temperature=0)
+        # 비용과 레이트 리밋을 고려해 gpt-4o-mini 사용
+        self.llm = llm or ChatOpenAI(model="gpt-4o-mini", temperature=0)
         self.tools = [hs_code_search, tariff_search_by_hs_code]
         
         # ReAct 에이전트 생성
+        # 설치된 langgraph 버전에서는 state_modifier 인자를 지원하지 않으므로,
+        # 시스템 프롬프트는 run()에서 SystemMessage로 주입한다.
         self.agent = create_react_agent(
             model=self.llm,
             tools=self.tools,
-            state_modifier=HS_CODE_FINDER_SYSTEM_PROMPT,
         )
     
     async def run(self, item_name: str) -> Dict[str, Any]:
@@ -77,11 +84,18 @@ class HSCodeFinderAgent:
         print(f"[HSCodeFinderAgent] ReAct 실행 시작: {item_name}")
         
         # ReAct 에이전트 실행
-        input_message = HumanMessage(content=f"다음 물품의 HS 코드를 찾고 관세율을 조회해주세요: {item_name}")
-        
-        result = await self.agent.ainvoke({
-            "messages": [input_message]
-        })
+        # 시스템 프롬프트를 SystemMessage로 명시적으로 추가
+        input_message = HumanMessage(
+            content=f"다음 물품의 HS 코드를 찾고 관세율을 조회해주세요: {item_name}"
+        )
+        result = await self.agent.ainvoke(
+            {
+                "messages": [
+                    SystemMessage(content=HS_CODE_FINDER_SYSTEM_PROMPT),
+                    input_message,
+                ]
+            }
+        )
         
         # 에이전트 메시지에서 결과 추출
         messages = result.get("messages", [])

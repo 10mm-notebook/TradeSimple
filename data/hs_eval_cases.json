@@ -1,0 +1,124 @@
+[
+  {
+    "id": 1,
+    "item_name": "냉동 참치",
+    "description": "일본산 냉동 참치를 대형 수산물 유통용으로 수입하려고 합니다.",
+    "expected_hs": "0303.43-0000"
+  },
+  {
+    "id": 2,
+    "item_name": "냉동 닭고기 날개",
+    "description": "식당용 냉동 닭 날개(윙) 부위, 포장 단위 10kg",
+    "expected_hs": "0207.14-1000"
+  },
+  {
+    "id": 3,
+    "item_name": "볶은 커피 원두",
+    "description": "카페 납품용으로 사용하는 볶은 아라비카 커피 원두",
+    "expected_hs": "0901.21-0000"
+  },
+  {
+    "id": 4,
+    "item_name": "초콜릿 바",
+    "description": "코코아 함량 40%인 초콜릿 바(개별 포장), 과자류 판매용",
+    "expected_hs": "1806.32-0000"
+  },
+  {
+    "id": 5,
+    "item_name": "탄산음료",
+    "description": "설탕이 첨가된 레몬맛 탄산음료, 캔(250ml) 포장",
+    "expected_hs": "2202.10-0000"
+  },
+  {
+    "id": 6,
+    "item_name": "스마트폰",
+    "description": "5G 지원, 터치스크린 탑재 스마트폰 본체",
+    "expected_hs": "8517.13-0000"
+  },
+  {
+    "id": 7,
+    "item_name": "스마트워치",
+    "description": "블루투스·와이파이 통신이 가능한 스마트워치, 심박센서 포함",
+    "expected_hs": "8517.62-9090"
+  },
+  {
+    "id": 8,
+    "item_name": "노트북 컴퓨터",
+    "description": "휴대용 노트북 컴퓨터, 15.6인치, SSD 512GB, RAM 16GB",
+    "expected_hs": "8471.30-0000"
+  },
+  {
+    "id": 9,
+    "item_name": "무선 블루투스 이어폰",
+    "description": "블루투스 무선 통신이 가능한 인이어형 이어폰 세트",
+    "expected_hs": "8517.62-1090"
+  },
+  {
+    "id": 10,
+    "item_name": "레이저 프린터",
+    "description": "사무용 흑백 레이저 프린터, 네트워크 기능 포함",
+    "expected_hs": "8443.32-1090"
+  },
+  {
+    "id": 11,
+    "item_name": "LED 책상 조명",
+    "description": "책상 위에서 사용하는 LED 스탠드 조명기구",
+    "expected_hs": "9405.40-9000"
+  },
+  {
+    "id": 12,
+    "item_name": "남성용 면 티셔츠",
+    "description": "100% 면으로 된 남성용 반팔 니트 티셔츠",
+    "expected_hs": "6109.10-0000"
+  },
+  {
+    "id": 13,
+    "item_name": "여성용 블라우스",
+    "description": "합성섬유(폴리에스터)로 된 여성용 블라우스",
+    "expected_hs": "6206.40-0000"
+  },
+  {
+    "id": 14,
+    "item_name": "운동화",
+    "description": "합성섬유 갑피와 고무 밑창으로 된 운동화",
+    "expected_hs": "6404.11-0000"
+  },
+  {
+    "id": 15,
+    "item_name": "사무용 의자",
+    "description": "높이 조절이 가능한 회전식 사무용 의자",
+    "expected_hs": "9401.30-0000"
+  },
+  {
+    "id": 16,
+    "item_name": "원목 식탁",
+    "description": "가정용 원목 식탁, 의자 별도",
+    "expected_hs": "9403.60-0000"
+  },
+  {
+    "id": 17,
+    "item_name": "플라스틱 저장 용기 세트",
+    "description": "식품 보관용 플라스틱 밀폐 용기 세트",
+    "expected_hs": "3924.10-0000"
+  },
+  {
+    "id": 18,
+    "item_name": "주방용 스테인리스 냄비",
+    "description": "인덕션 겸용 스테인리스 스틸 냄비, 유리 뚜껑 포함",
+    "expected_hs": "7323.93-0000"
+  },
+  {
+    "id": 19,
+    "item_name": "리튬이온 배터리 팩",
+    "description": "휴대용 전자기기용 충전식 리튬이온 배터리 모듈",
+    "expected_hs": "8507.60-0000"
+  },
+  {
+    "id": 20,
+    "item_name": "태블릿 PC",
+    "description": "터치스크린 탑재, 배터리 내장형 태블릿 PC",
+    "expected_hs": "8471.30-1000"
+  }
+]
+
+

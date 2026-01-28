@@ -5,7 +5,11 @@ Streamlit 기반 웹 인터페이스
 """
 import streamlit as st
 import asyncio
-import os
+import os,sys
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/..") #경로 오류 디버깅용
+
+
 from langchain_core.messages import HumanMessage, AIMessage
 from app.graph import run_agent, get_initial_state
 from app.state import FIELD_NAMES_KR

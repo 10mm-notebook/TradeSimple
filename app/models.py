@@ -6,7 +6,7 @@ import os
 from typing import Optional
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
 # 환경 변수 로드
 load_dotenv()

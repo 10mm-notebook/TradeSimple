@@ -7,7 +7,7 @@ Tax Calculator Agent
 import asyncio
 from typing import Dict, Any, Optional
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
 from app.tools import exchange_rate_loader, final_cost_calculator
 
@@ -61,10 +61,11 @@ class TaxCalculatorAgent:
         self.tools = [exchange_rate_loader, final_cost_calculator]
         
         # ReAct 에이전트 생성
+        # 설치된 langgraph 버전에서는 state_modifier 인자를 지원하지 않으므로,
+        # 시스템 프롬프트는 run()에서 SystemMessage로 주입한다.
         self.agent = create_react_agent(
             model=self.llm,
             tools=self.tools,
-            state_modifier=TAX_CALCULATOR_SYSTEM_PROMPT,
         )
     
     async def run(
@@ -95,19 +96,26 @@ class TaxCalculatorAgent:
             }
         """
         print(f"[TaxCalculatorAgent] ReAct 실행 시작: {quantity}개 × {unit_price} {currency}, 관세율 {tariff_rate}%")
-        
-        # ReAct 에이전트 실행
-        input_message = HumanMessage(content=f"""다음 수입 물품의 총 비용을 계산해주세요:
 
-- 단가: {unit_price} {currency}
-- 수량: {quantity}개
-- 적용 관세율: {tariff_rate}%
+        # ReAct 에이전트 실행 - SystemMessage로 시스템 프롬프트를 주입
+        input_message = HumanMessage(
+            content=(
+                f"다음 수입 물품의 총 비용을 계산해주세요:\n\n"
+                f"- 단가: {unit_price} {currency}\n"
+                f"- 수량: {quantity}개\n"
+                f"- 적용 관세율: {tariff_rate}%\n\n"
+                f"먼저 {currency} 환율을 조회한 후, 총 비용을 계산해주세요."
+            )
+        )
 
-먼저 {currency} 환율을 조회한 후, 총 비용을 계산해주세요.""")
-        
-        result = await self.agent.ainvoke({
-            "messages": [input_message]
-        })
+        result = await self.agent.ainvoke(
+            {
+                "messages": [
+                    SystemMessage(content=TAX_CALCULATOR_SYSTEM_PROMPT),
+                    input_message,
+                ]
+            }
+        )
         
         # 에이전트 메시지에서 결과 추출
         messages = result.get("messages", [])

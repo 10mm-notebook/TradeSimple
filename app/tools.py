@@ -12,7 +12,7 @@ from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from langchain_core.tools import tool
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
+from app.models import get_embedding_model
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfbase.ttfonts import TTFont
@@ -21,19 +21,6 @@ from docx import Document as DocxDocument
 
 # 환경 변수 로드
 load_dotenv()
-
-# --- 임베딩 모델 로드 ---
-def get_embedding_model():
-    """한국어 임베딩 모델 로더"""
-    model_name = "jhgan/ko-sroberta-multitask"
-    model_kwargs = {'device': 'cpu'}  # GPU 없이도 동작하도록 CPU 사용
-    encode_kwargs = {'normalize_embeddings': True}
-    return HuggingFaceEmbeddings(
-        model_name=model_name,
-        model_kwargs=model_kwargs,
-        encode_kwargs=encode_kwargs
-    )
-
 
 # --- CSV 파일을 미리 로드하여 메모리에 저장 ---
 TARIFF_DF = None
