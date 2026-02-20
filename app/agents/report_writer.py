@@ -62,7 +62,11 @@ class ReportWriterAgent:
         tax_amount: float,
         vat_amount: float,
         total_cost: float,
-        report_format: str = "all"
+        report_format: str = "all",
+        report_id: int = 0,
+        quantity_unit: str = "개",
+        price_unit: str = "1개당",
+        total_foreign_price: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         LLM으로 보고서 내용 생성 후 병렬로 파일 생성
@@ -71,6 +75,9 @@ class ReportWriterAgent:
             item_name: 물품명
             ... (기타 파라미터)
             report_format: 보고서 형식 (all/pdf/word/excel)
+            quantity_unit: 수량 단위 (개, kg, g 등)
+            price_unit: 단가 기준 (1개당, 100g당 등)
+            total_foreign_price: 총 외화 금액
             
         Returns:
             {
@@ -82,14 +89,17 @@ class ReportWriterAgent:
         print(f"[ReportWriterAgent] 실행 시작: {item_name}")
         
         # Step 1: LLM을 사용하여 보고서 내용 생성
-        total_foreign = unit_price * quantity
+        # total_foreign_price가 있으면 사용, 없으면 unit_price * quantity
+        total_foreign = total_foreign_price if total_foreign_price else (unit_price * quantity)
         total_krw = total_foreign * exchange_rate
         
         report_data = {
             "date": datetime.now().strftime("%Y년 %m월 %d일"),
             "item_name": item_name,
             "quantity": quantity,
+            "quantity_unit": quantity_unit,
             "unit_price": unit_price,
+            "price_unit": price_unit,
             "currency": currency,
             "total_foreign": total_foreign,
             "hs_code": hs_code,
@@ -128,14 +138,19 @@ class ReportWriterAgent:
             "총예상비용(원)": total_cost,
         }
         
+        # 파일명 생성 (품목명_HS코드_번호)
+        safe_item_name = self._sanitize_filename(item_name)
+        safe_hs_code = self._sanitize_filename(hs_code)
+        base_filename = f"{safe_item_name}_{safe_hs_code}_{report_id}"
+        
         if report_format == "all":
             # 🔥 병렬로 모든 형식 생성 (핵심!)
-            print(f"[ReportWriterAgent] PDF/Word/Excel 병렬 생성 시작...")
+            print(f"[ReportWriterAgent] PDF/Word/Excel 병렬 생성 시작... (filename={base_filename})")
             
             tasks = [
-                self._export_pdf_async(report_content),
-                self._export_word_async(report_content),
-                self._export_excel_async(excel_data),
+                self._export_pdf_async(report_content, base_filename),
+                self._export_word_async(report_content, base_filename),
+                self._export_excel_async(excel_data, base_filename),
             ]
             
             # asyncio.gather로 동시 실행
@@ -153,11 +168,11 @@ class ReportWriterAgent:
         else:
             # 단일 형식 생성
             if report_format == "pdf":
-                result = await self._export_pdf_async(report_content)
+                result = await self._export_pdf_async(report_content, base_filename)
             elif report_format == "word":
-                result = await self._export_word_async(report_content)
+                result = await self._export_word_async(report_content, base_filename)
             elif report_format == "excel":
-                result = await self._export_excel_async(excel_data)
+                result = await self._export_excel_async(excel_data, base_filename)
             else:
                 result = {"success": False, "error": f"Unknown format: {report_format}"}
             
@@ -181,8 +196,8 @@ class ReportWriterAgent:
 ## 기본 정보
 - 작성일: {date}
 - 물품명: {item_name}
-- 수량: {quantity:,}개
-- 단가: {unit_price:,.2f} {currency}
+- 수량: {quantity:,}{quantity_unit}
+- 단가: {unit_price:,.2f} {currency} ({price_unit})
 - 총 물품가격(외화): {total_foreign:,.2f} {currency}
 
 ## HS 코드 분류
@@ -208,12 +223,23 @@ class ReportWriterAgent:
         
         return response.content
     
-    async def _export_pdf_async(self, content: str) -> Dict[str, Any]:
+    def _sanitize_filename(self, name: str) -> str:
+        """파일명에 사용할 수 없는 문자 제거/치환."""
+        if not name:
+            return "unknown"
+        import re
+        # 파일명에 사용할 수 없는 문자 제거
+        sanitized = re.sub(r'[<>:"/\\|?*]', '', name)
+        # 점(.)은 하이픈(-)으로, 공백은 언더스코어(_)로
+        sanitized = sanitized.replace('.', '-').replace(' ', '_')
+        # 길이 제한 (30자)
+        return sanitized[:30] if len(sanitized) > 30 else sanitized
+    
+    async def _export_pdf_async(self, content: str, base_filename: str = "report") -> Dict[str, Any]:
         """PDF 내보내기 (비동기 래핑)"""
         try:
-            # 동기 함수를 비동기로 실행
             loop = asyncio.get_event_loop()
-            filename = "report.pdf"
+            filename = f"{base_filename}.pdf"
             result = await loop.run_in_executor(
                 None,
                 lambda: self.tools["pdf_report_exporter"].invoke({
@@ -234,11 +260,11 @@ class ReportWriterAgent:
                 "error": str(e)
             }
     
-    async def _export_word_async(self, content: str) -> Dict[str, Any]:
+    async def _export_word_async(self, content: str, base_filename: str = "report") -> Dict[str, Any]:
         """Word 내보내기 (비동기 래핑)"""
         try:
             loop = asyncio.get_event_loop()
-            filename = "report.docx"
+            filename = f"{base_filename}.docx"
             result = await loop.run_in_executor(
                 None,
                 lambda: self.tools["word_report_exporter"].invoke({
@@ -259,11 +285,11 @@ class ReportWriterAgent:
                 "error": str(e)
             }
     
-    async def _export_excel_async(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def _export_excel_async(self, data: Dict[str, Any], base_filename: str = "report") -> Dict[str, Any]:
         """Excel 내보내기 (비동기 래핑)"""
         try:
             loop = asyncio.get_event_loop()
-            filename = "report.xlsx"
+            filename = f"{base_filename}.xlsx"
             result = await loop.run_in_executor(
                 None,
                 lambda: self.tools["excel_report_exporter"].invoke({

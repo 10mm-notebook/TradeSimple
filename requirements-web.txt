@@ -1,0 +1,8 @@
+# TradeSimple Web UI - 경량 의존성
+# 🔥 UI만 담당, 모든 비즈니스 로직은 API 서버에서 처리
+
+# Web Framework
+streamlit>=1.28.0
+
+# HTTP Client (API 호출용)
+httpx>=0.25.0

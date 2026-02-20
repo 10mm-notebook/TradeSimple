@@ -73,7 +73,10 @@ class TaxCalculatorAgent:
         unit_price: float,
         quantity: int,
         currency: str,
-        tariff_rate: float
+        tariff_rate: float,
+        total_foreign_price: Optional[float] = None,
+        quantity_unit: str = "개",
+        price_unit: str = "1개당",
     ) -> Dict[str, Any]:
         """
         ReAct 패턴으로 환율 조회 및 비용 계산 실행
@@ -83,6 +86,9 @@ class TaxCalculatorAgent:
             quantity: 수량
             currency: 통화 코드 (USD, EUR 등)
             tariff_rate: 관세율 (%)
+            total_foreign_price: 총 외화 금액 (단위 변환 계산 후, 있으면 우선 사용)
+            quantity_unit: 수량 단위 (개, kg, g 등)
+            price_unit: 단가 기준 (1개당, 100g당 등)
             
         Returns:
             {
@@ -95,16 +101,21 @@ class TaxCalculatorAgent:
                 "agent_messages": List[str]
             }
         """
-        print(f"[TaxCalculatorAgent] ReAct 실행 시작: {quantity}개 × {unit_price} {currency}, 관세율 {tariff_rate}%")
+        # 총 외화 금액 결정 (total_foreign_price 우선, 없으면 quantity * unit_price)
+        actual_foreign_total = total_foreign_price if total_foreign_price else (quantity * unit_price)
+        
+        print(f"[TaxCalculatorAgent] ReAct 실행 시작: {quantity}{quantity_unit} × {unit_price} {currency} ({price_unit}), 총 외화={actual_foreign_total} {currency}, 관세율 {tariff_rate}%")
 
         # ReAct 에이전트 실행 - SystemMessage로 시스템 프롬프트를 주입
         input_message = HumanMessage(
             content=(
                 f"다음 수입 물품의 총 비용을 계산해주세요:\n\n"
-                f"- 단가: {unit_price} {currency}\n"
-                f"- 수량: {quantity}개\n"
+                f"- 단가: {unit_price} {currency} ({price_unit})\n"
+                f"- 수량: {quantity}{quantity_unit}\n"
+                f"- 총 외화 금액: {actual_foreign_total} {currency}\n"
                 f"- 적용 관세율: {tariff_rate}%\n\n"
-                f"먼저 {currency} 환율을 조회한 후, 총 비용을 계산해주세요."
+                f"먼저 {currency} 환율을 조회한 후, 총 비용을 계산해주세요.\n"
+                f"**중요: 총 외화 금액 {actual_foreign_total} {currency}를 기준으로 계산하세요.**"
             )
         )
 
@@ -166,23 +177,29 @@ class TaxCalculatorAgent:
             exchange_rate = exchange_result["rate"]
         
         if total_cost is None:
-            cost_result = final_cost_calculator.invoke({
-                "item_price": unit_price,
-                "quantity": quantity,
-                "exchange_rate": exchange_rate,
-                "tariff_rate": tariff_rate
-            })
-            total_cost = cost_result["total_cost"]
-            tax_amount = cost_result["tariff_amount"]
-            vat_amount = cost_result["vat_amount"]
-            breakdown = cost_result["breakdown"]
-        else:
-            total_krw = unit_price * quantity * exchange_rate
+            # actual_foreign_total을 사용해서 직접 계산
+            total_krw = actual_foreign_total * exchange_rate
+            tax_amount = total_krw * (tariff_rate / 100)
+            price_with_tariff = total_krw + tax_amount
+            vat_amount = price_with_tariff * 0.10
+            total_cost = price_with_tariff + vat_amount
             breakdown = f"""--- 최종 비용 계산 결과 ---
-1. 총 물품 가격 (원화): {total_krw:,.0f} 원
-   (단가 {unit_price:,.2f} × 수량 {quantity} × 환율 {exchange_rate:,.2f})
-2. 예상 관세 ({tariff_rate}%): {tax_amount:,.0f} 원
-3. 예상 부가세 (10%): {vat_amount:,.0f} 원
+1. 총 물품 가격 (외화): {actual_foreign_total:,.2f} {currency}
+   ({quantity}{quantity_unit} × {unit_price} {currency} {price_unit})
+2. 총 물품 가격 (원화): {total_krw:,.0f} 원
+   (총 외화 {actual_foreign_total:,.2f} × 환율 {exchange_rate:,.2f})
+3. 예상 관세 ({tariff_rate}%): {tax_amount:,.0f} 원
+4. 예상 부가세 (10%): {vat_amount:,.0f} 원
+--------------------------------
+   총 예상 수입 비용: {total_cost:,.0f} 원
+--------------------------------"""
+        else:
+            total_krw = actual_foreign_total * exchange_rate
+            breakdown = f"""--- 최종 비용 계산 결과 ---
+1. 총 물품 가격 (외화): {actual_foreign_total:,.2f} {currency}
+2. 총 물품 가격 (원화): {total_krw:,.0f} 원
+3. 예상 관세 ({tariff_rate}%): {tax_amount:,.0f} 원
+4. 예상 부가세 (10%): {vat_amount:,.0f} 원
 --------------------------------
    총 예상 수입 비용: {total_cost:,.0f} 원
 --------------------------------"""

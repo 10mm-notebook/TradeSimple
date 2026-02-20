@@ -3,7 +3,7 @@
 AgentState 정의 - LangGraph 상태 관리를 위한 TypedDict
 모든 필드는 초기값 None으로 설정됨
 """
-from typing import TypedDict, Optional, List, Dict, Annotated
+from typing import TypedDict, Optional, List, Dict, Annotated, Any
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
@@ -38,13 +38,17 @@ class AgentState(TypedDict):
     # 사용자 입력 (초기값 None)
     item_name: Optional[str]
     quantity: Optional[int]
+    quantity_unit: Optional[str]  # 수량 단위 (개, kg, g, lb 등)
     unit_price: Optional[float]
+    price_unit: Optional[str]  # 단가 기준 (1개당, 100g당, 1kg당 등)
+    total_foreign_price: Optional[float]  # 총 외화 금액 (단위 변환 계산 후)
     currency: Optional[str]
     report_format: Optional[str]
     
     # 처리 결과 (초기값 None)
     hs_code: Optional[str]
     hs_code_rationale: Optional[str]
+    hs_code_candidates: Optional[List[Dict[str, Any]]]  # HITL용 후보 3개
     tariff_rate: Optional[float]
     exchange_rate: Optional[float]
     tax_amount: Optional[float]
@@ -57,6 +61,7 @@ class AgentState(TypedDict):
     missing_info: Optional[List[str]]
     current_phase: Optional[str]
     error: Optional[str]
+    report_id: Optional[int]  # 메시지별 보고서 파일 구분용 (report_0.pdf 등)
 
 
 def get_initial_state() -> dict:
@@ -65,13 +70,17 @@ def get_initial_state() -> dict:
         # 사용자 입력
         "item_name": None,
         "quantity": None,
+        "quantity_unit": None,
         "unit_price": None,
+        "price_unit": None,
+        "total_foreign_price": None,
         "currency": None,
         "report_format": "all",  # PDF, Word, Excel 모두 생성
         
         # 처리 결과
         "hs_code": None,
         "hs_code_rationale": None,
+        "hs_code_candidates": None,  # HITL용 후보 3개
         "tariff_rate": None,
         "exchange_rate": None,
         "tax_amount": None,
@@ -84,6 +93,7 @@ def get_initial_state() -> dict:
         "missing_info": None,
         "current_phase": "input_validation",
         "error": None,
+        "report_id": None,
     }
 
 
@@ -93,7 +103,9 @@ REQUIRED_FIELDS = ["item_name", "quantity", "unit_price", "currency"]
 # 필드 한글명 매핑
 FIELD_NAMES_KR = {
     "item_name": "물품명",
-    "quantity": "개수",
+    "quantity": "수량",
+    "quantity_unit": "수량 단위",
     "unit_price": "단가",
+    "price_unit": "단가 기준",
     "currency": "통화",
 }

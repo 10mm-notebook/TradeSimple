@@ -33,6 +33,11 @@ async def input_validator_node(state: AgentState) -> Dict[str, Any]:
     """
     print("[Node] input_validator 실행")
     
+    # 🔥 이미 HS 코드가 선택되어 있으면 (HITL 후) 바로 tax_calculator로
+    if state.get("hs_code") and state.get("current_phase") == "tax_calculator":
+        print("[Node] input_validator - HS 코드 이미 선택됨, tax_calculator로 바로 진행")
+        return {"current_phase": "tax_calculator"}
+    
     messages = state.get("messages", [])
     if not messages:
         return {
@@ -61,15 +66,37 @@ async def input_validator_node(state: AgentState) -> Dict[str, Any]:
 사용자 메시지에서 다음 정보를 추출하세요:
 
 1. item_name: 수입하려는 물품명 (예: 냉동 참치, 스마트워치, 노트북)
-2. quantity: 수량 (숫자만)
-3. unit_price: 단가 (숫자만)
-4. currency: 통화 (USD, EUR, JPY 등. 달러는 USD, 엔은 JPY, 유로는 EUR)
+2. quantity: 수량 (숫자만, 단위 무시)
+3. quantity_unit: 수량의 단위 (개, kg, g, lb, 톤, 박스 등)
+4. unit_price: 단가 (숫자만)
+5. price_unit: 단가 기준 (1개당, 100g당, 1kg당, 박스당 등)
+6. total_foreign_price: **총 외화 금액을 직접 계산** (중요!)
+7. currency: 통화코드 (3자리 ISO 코드)
+
+**단위 계산 예시 (중요!):**
+- "100그램당 5위안, 300kg 수입" → 300kg = 300,000g, 총 가격 = (300,000 / 100) × 5 = 15,000
+- "1kg당 10달러, 500kg 수입" → 총 가격 = 500 × 10 = 5,000
+- "개당 300달러, 100개 수입" → 총 가격 = 100 × 300 = 30,000
+
+**통화 변환 규칙:**
+- "달러", "$", "불" → USD
+- "엔", "¥" → JPY
+- "유로", "€" → EUR
+- "위안", "元" → CNY
+- "원", "₩" → KRW
+- "파운드", "£" → GBP
+- 호주/캐나다/홍콩/싱가포르/대만 달러 → AUD/CAD/HKD/SGD/TWD
+- "바트" → THB, "동" → VND, "루피" → INR, "루블" → RUB
+- 통화 미명시 → USD
 
 다음 형식으로 정확히 응답하세요:
-ITEM_NAME: [물품명 또는 NONE]
-QUANTITY: [숫자 또는 NONE]
-UNIT_PRICE: [숫자 또는 NONE]
-CURRENCY: [통화코드 또는 NONE]"""),
+ITEM_NAME: [물품명]
+QUANTITY: [총 수량 숫자]
+QUANTITY_UNIT: [수량 단위: 개/kg/g/lb/톤/박스 등]
+UNIT_PRICE: [단가 숫자]
+PRICE_UNIT: [단가 기준: 1개당/100g당/1kg당 등]
+TOTAL_FOREIGN_PRICE: [총 외화 금액 계산 결과]
+CURRENCY: [통화코드]"""),
         ("human", "{user_message}")
     ])
     
@@ -85,51 +112,126 @@ CURRENCY: [통화코드 또는 NONE]"""),
         extracted["item_name"] = match.group(1).strip()
     
     # QUANTITY 추출
-    match = re.search(r'QUANTITY:\s*(\d+)', extraction_text)
+    match = re.search(r'QUANTITY:\s*([\d,]+)', extraction_text)
     if match:
-        extracted["quantity"] = int(match.group(1))
+        extracted["quantity"] = int(match.group(1).replace(',', ''))
+    
+    # QUANTITY_UNIT 추출
+    match = re.search(r'QUANTITY_UNIT:\s*(.+?)(?:\n|$)', extraction_text)
+    if match and match.group(1).strip().upper() != 'NONE':
+        extracted["quantity_unit"] = match.group(1).strip()
     
     # UNIT_PRICE 추출
-    match = re.search(r'UNIT_PRICE:\s*([\d.]+)', extraction_text)
+    match = re.search(r'UNIT_PRICE:\s*([\d.,]+)', extraction_text)
     if match:
-        extracted["unit_price"] = float(match.group(1))
+        extracted["unit_price"] = float(match.group(1).replace(',', ''))
     
-    # CURRENCY 추출
+    # PRICE_UNIT 추출
+    match = re.search(r'PRICE_UNIT:\s*(.+?)(?:\n|$)', extraction_text)
+    if match and match.group(1).strip().upper() != 'NONE':
+        extracted["price_unit"] = match.group(1).strip()
+    
+    # TOTAL_FOREIGN_PRICE 추출 (LLM이 계산한 총 외화 금액)
+    match = re.search(r'TOTAL_FOREIGN_PRICE:\s*([\d.,]+)', extraction_text)
+    if match:
+        extracted["total_foreign_price"] = float(match.group(1).replace(',', ''))
+    
+    # CURRENCY 추출 (NON, NONE 제외)
     match = re.search(r'CURRENCY:\s*([A-Z]{3})', extraction_text)
     if match:
-        extracted["currency"] = match.group(1)
+        curr = match.group(1).upper()
+        if curr in ("NON", "NONE", "NAN"):
+            # 잘못된 값이면 기본값 USD
+            extracted["currency"] = "USD"
+        else:
+            extracted["currency"] = curr
     else:
         # 기본값 USD
-        if extracted.get("unit_price"):
+        extracted["currency"] = "USD"
+    
+    # 사용자 입력에서 직접 통화 패턴 추출 (LLM이 못 잡은 경우 보완)
+    # 순서 중요: 더 구체적인 패턴을 먼저 검사
+    if user_message:
+        msg = user_message
+        msg_lower = msg.lower()
+        
+        # 복합어 먼저 체크 (호주 달러, 캐나다 달러 등)
+        if "호주" in msg_lower and "달러" in msg_lower:
+            extracted["currency"] = "AUD"
+        elif "캐나다" in msg_lower and "달러" in msg_lower:
+            extracted["currency"] = "CAD"
+        elif "홍콩" in msg_lower and "달러" in msg_lower:
+            extracted["currency"] = "HKD"
+        elif "싱가포르" in msg_lower and "달러" in msg_lower:
+            extracted["currency"] = "SGD"
+        elif "대만" in msg_lower and "달러" in msg_lower:
+            extracted["currency"] = "TWD"
+        # 단일 키워드
+        elif "원" in msg or "₩" in msg:
+            extracted["currency"] = "KRW"
+        elif "달러" in msg_lower or "$" in msg or "불" in msg_lower:
             extracted["currency"] = "USD"
+        elif "엔" in msg_lower or "¥" in msg:
+            extracted["currency"] = "JPY"
+        elif "유로" in msg_lower or "€" in msg:
+            extracted["currency"] = "EUR"
+        elif "위안" in msg_lower or "元" in msg:
+            extracted["currency"] = "CNY"
+        elif "파운드" in msg_lower or "£" in msg:
+            extracted["currency"] = "GBP"
+        elif "프랑" in msg_lower:
+            extracted["currency"] = "CHF"
+        elif "바트" in msg_lower:
+            extracted["currency"] = "THB"
+        elif "동" in msg and ("베트남" in msg_lower or "vnd" in msg_lower):
+            extracted["currency"] = "VND"
+        elif "루피" in msg_lower:
+            extracted["currency"] = "INR"
+        elif "루블" in msg_lower:
+            extracted["currency"] = "RUB"
+        elif "링깃" in msg_lower:
+            extracted["currency"] = "MYR"
+        elif "페소" in msg_lower:
+            extracted["currency"] = "PHP"
     
     # 기존 상태와 병합
     item_name = extracted.get("item_name") or state.get("item_name")
     quantity = extracted.get("quantity") or state.get("quantity")
+    quantity_unit = extracted.get("quantity_unit") or state.get("quantity_unit") or "개"
     unit_price = extracted.get("unit_price") or state.get("unit_price")
+    price_unit = extracted.get("price_unit") or state.get("price_unit") or "1개당"
+    total_foreign_price = extracted.get("total_foreign_price") or state.get("total_foreign_price")
     currency = extracted.get("currency") or state.get("currency")
     
-    # 누락된 정보 확인
+    # total_foreign_price가 없으면 기본 계산 (quantity * unit_price)
+    if not total_foreign_price and quantity and unit_price:
+        total_foreign_price = quantity * unit_price
+    
+    # 누락된 정보 확인 (total_foreign_price가 있으면 개별 필드 없어도 OK)
     missing = []
     if not item_name:
         missing.append("item_name")
-    if not quantity:
-        missing.append("quantity")
-    if not unit_price:
-        missing.append("unit_price")
+    if not total_foreign_price:
+        if not quantity:
+            missing.append("quantity")
+        if not unit_price:
+            missing.append("unit_price")
     if not currency:
         missing.append("currency")
     
     update = {
         "item_name": item_name,
         "quantity": quantity,
+        "quantity_unit": quantity_unit,
         "unit_price": unit_price,
+        "price_unit": price_unit,
+        "total_foreign_price": total_foreign_price,
         "currency": currency,
         "missing_info": missing if missing else None,
         "current_phase": "request_info" if missing else "parallel_fetch",
     }
     
-    print(f"[Node] input_validator 완료: 추출됨={extracted}, 누락={missing}")
+    print(f"[Node] input_validator 완료: 추출됨={extracted}, 총외화={total_foreign_price}, 누락={missing}")
     return update
 
 
@@ -160,41 +262,55 @@ async def supervisor_node(state: AgentState) -> Dict[str, Any]:
     - 전체 워크플로우 조율
     - 현재 단계 확인 및 다음 작업 결정
     """
-    print("[Node] supervisor 실행")
-    
     current_phase = state.get("current_phase", "input_validation")
+    total_cost = state.get("total_cost")
+    hs_code = state.get("hs_code")
+    report_paths = state.get("report_paths")
+    
+    print(f"[Node] supervisor 실행 - phase={current_phase}, hs_code={hs_code}, total_cost={total_cost}, report_paths={bool(report_paths)}")
+    
+    # 🔥 Human-in-the-Loop: HS 코드 선택 대기 상태면 종료 (사용자 선택 필요)
+    if current_phase == "hs_code_selection":
+        print("[Node] supervisor - HS 코드 선택 대기 (Human-in-the-Loop)")
+        return {"current_phase": "hs_code_selection"}  # 상태 유지하며 종료 → UI에서 선택
+    
+    # 🔥 이미 비용 계산이 완료되었으면 (current_phase가 report_writer면) 보고서로
+    if current_phase == "report_writer" and total_cost is not None:
+        print("[Node] supervisor - 비용 계산 완료, report_writer로")
+        return {"current_phase": "report_writer"}
     
     # 단계별 상태 확인
     if state.get("missing_info"):
         return {"current_phase": "request_info"}
     
     # HS 코드와 환율이 모두 없으면 병렬 조회
-    if not state.get("hs_code") and not state.get("exchange_rate"):
+    if not hs_code and not state.get("exchange_rate"):
         return {"current_phase": "parallel_fetch"}
     
     # HS 코드만 없으면
-    if not state.get("hs_code"):
+    if not hs_code:
         return {"current_phase": "hs_code_finder"}
     
-    # 비용 계산이 안 됐으면
-    if state.get("total_cost") is None:
+    # 비용 계산이 안 됐으면 (total_cost가 None이거나 명시적으로 0이 아닌 None)
+    if total_cost is None:
         return {"current_phase": "tax_calculator"}
     
     # 보고서가 없으면
-    if not state.get("report_paths"):
+    if not report_paths:
         return {"current_phase": "report_writer"}
     
     # 모든 작업 완료
+    print("[Node] supervisor - 완료")
     return {"current_phase": "complete"}
 
 
 async def parallel_fetch_node(state: AgentState) -> Dict[str, Any]:
     """
-    🔥 병렬 조회 노드 (핵심!)
-    - HS 코드 검색과 환율 조회를 동시에 실행
-    - asyncio.gather를 사용한 진짜 병렬 처리
+    🔥 병렬 조회 노드 (Human-in-the-Loop 적용)
+    - HS 코드 후보 3개 검색과 환율 조회를 동시에 실행
+    - 사용자가 HS 코드를 선택할 수 있도록 후보 반환
     """
-    print("[Node] parallel_fetch 실행 - HS 코드 검색 + 환율 조회 병렬 시작")
+    print("[Node] parallel_fetch 실행 - HS 코드 후보 검색 + 환율 조회 병렬 시작")
     
     item_name = state.get("item_name")
     currency = state.get("currency", "USD")
@@ -202,14 +318,13 @@ async def parallel_fetch_node(state: AgentState) -> Dict[str, Any]:
     if not item_name:
         return {"error": "물품명이 없습니다.", "current_phase": "request_info"}
     
-    # 상태 메시지
-    status_msg = AIMessage(content=f"**병렬 처리 시작:** '{item_name}'의 HS 코드 검색과 {currency} 환율 조회를 동시에 실행합니다...")
+    status_msg = AIMessage(content=f"**병렬 처리 시작:** '{item_name}'의 HS 코드 후보를 검색하고 {currency} 환율을 조회합니다...")
     
-    # 🔥 병렬 실행: HS 코드 검색 + 환율 조회
-    async def fetch_hs_code():
-        """HS 코드 검색 (ReAct 에이전트)"""
+    # 🔥 병렬 실행: HS 코드 후보 검색 + 환율 조회
+    async def fetch_hs_code_candidates():
+        """HS 코드 후보 3개 검색 (Human-in-the-Loop)"""
         agent = HSCodeFinderAgent()
-        return await agent.run(item_name)
+        return await agent.run_with_candidates(item_name)
     
     async def fetch_exchange_rate():
         """환율 조회"""
@@ -219,22 +334,40 @@ async def parallel_fetch_node(state: AgentState) -> Dict[str, Any]:
             lambda: exchange_rate_loader.invoke({"target_currency": currency})
         )
     
-    # asyncio.gather로 동시 실행!
     print("[Node] parallel_fetch - asyncio.gather 시작")
     hs_result, exchange_result = await asyncio.gather(
-        fetch_hs_code(),
+        fetch_hs_code_candidates(),
         fetch_exchange_rate()
     )
     print("[Node] parallel_fetch - asyncio.gather 완료")
     
-    return {
-        "messages": [status_msg],
-        "hs_code": hs_result["hs_code"],
-        "hs_code_rationale": hs_result["rationale"],
-        "tariff_rate": hs_result["tariff_rate"],
-        "exchange_rate": exchange_result["rate"],
-        "current_phase": "tax_calculator",
-    }
+    candidates = hs_result.get("candidates", [])
+    
+    # 후보가 있으면 사용자 선택 대기, 없으면 바로 진행
+    if candidates and len(candidates) > 0:
+        # 선택 안내 메시지
+        selection_msg = AIMessage(
+            content="**HS 코드 후보를 찾았습니다.** 아래에서 가장 적합한 HS 코드를 선택해주세요:",
+            additional_kwargs={"hs_code_candidates": candidates}
+        )
+        return {
+            "messages": [status_msg, selection_msg],
+            "hs_code_candidates": candidates,
+            "exchange_rate": exchange_result["rate"],
+            "current_phase": "hs_code_selection",  # 사용자 선택 대기
+        }
+    else:
+        # 후보 없으면 기본 검색 결과 사용
+        agent = HSCodeFinderAgent()
+        default_result = await agent.run(item_name)
+        return {
+            "messages": [status_msg],
+            "hs_code": default_result["hs_code"],
+            "hs_code_rationale": default_result["rationale"],
+            "tariff_rate": default_result["tariff_rate"],
+            "exchange_rate": exchange_result["rate"],
+            "current_phase": "tax_calculator",
+        }
 
 
 async def hs_code_finder_node(state: AgentState) -> Dict[str, Any]:
@@ -266,17 +399,24 @@ async def tax_calculator_node(state: AgentState) -> Dict[str, Any]:
     """
     Tax Calculator 노드 (ReAct 패턴)
     - 환율이 이미 조회된 상태에서 비용 계산
+    - 무게/개수 등 다양한 단위 지원
     """
     print("[Node] tax_calculator 실행")
     
-    unit_price = state.get("unit_price")
-    quantity = state.get("quantity")
+    unit_price = state.get("unit_price") or 0
+    quantity = state.get("quantity") or 0
+    quantity_unit = state.get("quantity_unit") or "개"
+    price_unit = state.get("price_unit") or "1개당"
+    total_foreign_price = state.get("total_foreign_price")
     currency = state.get("currency")
     tariff_rate = state.get("tariff_rate", 0.0)
     exchange_rate = state.get("exchange_rate")
     
-    if not all([unit_price, quantity, currency]):
+    # total_foreign_price가 있거나, unit_price와 quantity가 있어야 함
+    if not total_foreign_price and not (unit_price and quantity):
         return {"error": "비용 계산에 필요한 정보가 부족합니다.", "current_phase": "request_info"}
+    if not currency:
+        return {"error": "통화 정보가 없습니다.", "current_phase": "request_info"}
     
     status_msg = AIMessage(content=f"**Tax Calculator (ReAct):** 비용을 계산합니다...")
     
@@ -285,17 +425,24 @@ async def tax_calculator_node(state: AgentState) -> Dict[str, Any]:
         unit_price=unit_price,
         quantity=quantity,
         currency=currency,
-        tariff_rate=tariff_rate
+        tariff_rate=tariff_rate,
+        total_foreign_price=total_foreign_price,
+        quantity_unit=quantity_unit,
+        price_unit=price_unit,
     )
     
     # 병렬 조회에서 이미 환율을 가져왔다면 그 값 유지
     final_exchange_rate = exchange_rate or result["exchange_rate"]
+    final_total_cost = result["total_cost"]
+    final_tax_amount = result["tax_amount"]
+    
+    print(f"[Node] tax_calculator 완료 - total_cost={final_total_cost}, tax={final_tax_amount}, exchange_rate={final_exchange_rate}")
     
     return {
         "messages": [status_msg],
         "exchange_rate": final_exchange_rate,
-        "tax_amount": result["tax_amount"],
-        "total_cost": result["total_cost"],
+        "tax_amount": final_tax_amount,
+        "total_cost": final_total_cost,
         "current_phase": "report_writer",
     }
 
@@ -304,6 +451,7 @@ async def report_writer_node(state: AgentState) -> Dict[str, Any]:
     """
     Report Writer 노드 (병렬 보고서 생성)
     - PDF, Word, Excel을 asyncio.gather로 동시 생성
+    - 파일명에 품목명과 HS코드 포함
     """
     print("[Node] report_writer 실행")
     
@@ -313,11 +461,13 @@ async def report_writer_node(state: AgentState) -> Dict[str, Any]:
     
     exchange_source = "exchangerate-api.com"
     
-    # 부가세 계산
-    total_krw = state.get("unit_price", 0) * state.get("quantity", 0) * state.get("exchange_rate", 1)
+    # 총 외화 금액 및 원화 계산
+    total_foreign_price = state.get("total_foreign_price") or (state.get("unit_price", 0) * state.get("quantity", 0))
+    total_krw = total_foreign_price * state.get("exchange_rate", 1)
     tax_amount = state.get("tax_amount", 0)
     vat_amount = (total_krw + tax_amount) * 0.10
     
+    report_id = state.get("report_id", 0)
     result = await agent.run(
         item_name=state.get("item_name", ""),
         quantity=state.get("quantity", 0),
@@ -331,7 +481,11 @@ async def report_writer_node(state: AgentState) -> Dict[str, Any]:
         tax_amount=tax_amount,
         vat_amount=vat_amount,
         total_cost=state.get("total_cost", 0),
-        report_format="all"  # PDF/Word/Excel 병렬 생성
+        report_format="all",  # PDF/Word/Excel 병렬 생성
+        report_id=report_id,
+        quantity_unit=state.get("quantity_unit", "개"),
+        price_unit=state.get("price_unit", "1개당"),
+        total_foreign_price=total_foreign_price,
     )
     
     final_msg = AIMessage(
@@ -360,6 +514,8 @@ def route_supervisor(state: AgentState) -> Literal["parallel_fetch", "hs_code_fi
     """Supervisor 라우팅"""
     phase = state.get("current_phase", "")
     
+    print(f"[Route] supervisor → {phase}")
+    
     if phase == "parallel_fetch":
         return "parallel_fetch"
     elif phase == "hs_code_finder":
@@ -368,6 +524,12 @@ def route_supervisor(state: AgentState) -> Literal["parallel_fetch", "hs_code_fi
         return "tax_calculator"
     elif phase == "report_writer":
         return "report_writer"
+    elif phase == "hs_code_selection":
+        # Human-in-the-Loop: 사용자 선택 대기 → 그래프 종료
+        return "end_node"
+    elif phase == "complete":
+        # 모든 작업 완료 → 그래프 종료
+        return "end_node"
     else:
         return "end_node"
 
@@ -438,29 +600,152 @@ def get_graph():
     return _graph
 
 
-async def run_agent(user_input: str, current_state: Optional[Dict] = None) -> Dict[str, Any]:
+def _status_message(node_name: str, state: Dict[str, Any]) -> str:
+    """노드별 스트리밍용 상태 메시지."""
+    item_name = state.get("item_name") or "물품"
+    currency = state.get("currency", "USD")
+    now = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
+    if node_name == "input_validator":
+        return "📥 입력 정보를 분석하고 있습니다..."
+    if node_name == "request_info":
+        return "⏳ 추가 정보가 필요합니다. 안내 메시지를 작성 중입니다."
+    if node_name == "parallel_fetch":
+        return f"🔍 **'{item_name}'**의 HS 코드를 검색하고, **{currency}** 환율을 조회하고 있습니다..."
+    if node_name == "hs_code_finder":
+        return f"🔍 **'{item_name}'**의 HS 코드를 검색하고 있습니다..."
+    if node_name == "tax_calculator":
+        er = state.get("exchange_rate")
+        if er is not None:
+            return f"💱 {now} 현재 환율은 **{er:,.2f} KRW/{currency}** 입니다. 비용을 계산하고 있습니다..."
+        return "💰 비용을 계산하고 있습니다..."
+    if node_name == "report_writer":
+        return "📝 PDF·Word·Excel 보고서를 생성하고 있습니다..."
+    return "처리 중..."
+
+
+async def run_agent(
+    user_input: str,
+    current_state: Optional[Dict] = None,
+    report_id: Optional[int] = None,
+) -> Dict[str, Any]:
     """
     에이전트 실행 함수
     
     Args:
         user_input: 사용자 입력 메시지
         current_state: 현재 상태 (대화 지속 시)
+        report_id: 메시지별 보고서 파일 구분용 (report_0.pdf 등)
         
     Returns:
         업데이트된 상태 딕셔너리
     """
     graph = get_graph()
     
-    # 초기 상태 설정
     if current_state is None:
         state = get_initial_state()
     else:
         state = current_state.copy()
     
-    # 사용자 메시지 추가
     state["messages"] = state.get("messages", []) + [HumanMessage(content=user_input)]
+    if report_id is not None:
+        state["report_id"] = report_id
     
-    # 그래프 실행
     final_state = await graph.ainvoke(state)
-    
     return final_state
+
+
+async def run_agent_stream(
+    user_input: str,
+    current_state: Optional[Dict] = None,
+    report_id: Optional[int] = None,
+):
+    """
+    에이전트 실행 + 실시간 진행 상황 스트리밍 (async generator).
+    yield: {"message": str, "state": dict}
+    """
+    graph = get_graph()
+    
+    if current_state is None:
+        state = get_initial_state()
+    else:
+        state = current_state.copy()
+    
+    state["messages"] = state.get("messages", []) + [HumanMessage(content=user_input)]
+    if report_id is not None:
+        state["report_id"] = report_id
+    
+    current = dict(state)
+    async for event in graph.astream(state, stream_mode="updates"):
+        for node_name, update in event.items():
+            current = {**current, **update}
+            msg = _status_message(node_name, current)
+            yield {"message": msg, "state": current}
+    
+    yield {"message": "✅ 처리 완료", "state": current}
+
+
+async def continue_after_hs_selection(
+    selected_hs_code: str,
+    selected_tariff_rate: float,
+    selected_rationale: str,
+    current_state: Dict[str, Any],
+    report_id: Optional[int] = None,
+):
+    """
+    사용자가 HS 코드를 선택한 후 계산을 계속 진행 (async generator).
+    
+    Args:
+        selected_hs_code: 사용자가 선택한 HS 코드
+        selected_tariff_rate: 선택한 HS 코드의 관세율 (0이면 조회 필요)
+        selected_rationale: 선택 근거
+        current_state: 현재 상태
+        report_id: 보고서 파일 번호
+    """
+    from app.tools import tariff_search_by_hs_code
+    
+    graph = get_graph()
+    
+    state = current_state.copy()
+    state["hs_code"] = selected_hs_code
+    state["hs_code_rationale"] = selected_rationale
+    state["hs_code_candidates"] = None  # 선택 완료
+    state["current_phase"] = "tax_calculator"  # 다음 단계로
+    
+    if report_id is not None:
+        state["report_id"] = report_id
+    
+    # 🔥 관세율이 0이면 조회 (HITL 단계에서는 관세율 미조회)
+    tariff_rate = selected_tariff_rate
+    if tariff_rate == 0.0:
+        try:
+            tariff_result = tariff_search_by_hs_code.invoke({"hs_code": selected_hs_code})
+            # 결과에서 관세율 추출
+            import re
+            tariff_match = re.search(r'최종[^:]*세율[:\s]*([0-9.]+)', tariff_result)
+            if tariff_match:
+                tariff_rate = float(tariff_match.group(1))
+            else:
+                # 기본세율 추출 시도
+                basic_match = re.search(r'기본세율[:\s]*([0-9.]+)', tariff_result)
+                if basic_match:
+                    tariff_rate = float(basic_match.group(1))
+        except Exception as e:
+            print(f"[continue_after_hs_selection] 관세율 조회 실패: {e}")
+            tariff_rate = 0.0
+    
+    state["tariff_rate"] = tariff_rate
+    
+    # 선택 메시지 추가
+    selection_msg = AIMessage(
+        content=f"**선택된 HS 코드:** {selected_hs_code} (관세율 {tariff_rate}%)\n\n계산을 진행합니다..."
+    )
+    state["messages"] = state.get("messages", []) + [selection_msg]
+    
+    current = dict(state)
+    async for event in graph.astream(state, stream_mode="updates"):
+        for node_name, update in event.items():
+            current = {**current, **update}
+            msg = _status_message(node_name, current)
+            yield {"message": msg, "state": current}
+    
+    yield {"message": "✅ 처리 완료", "state": current}

@@ -4,6 +4,7 @@
 비동기 지원 및 명확한 리턴 타입 제공
 """
 import os
+import re
 import asyncio
 import requests
 import pandas as pd
@@ -35,6 +36,10 @@ except FileNotFoundError:
 _retriever = None
 _hs_code_search_call_count = 0
 _tariff_search_call_count = 0
+_query_expander = None
+
+# 검색 쿼리 확장 (LLM 기반) 사용 여부
+USE_LLM_QUERY_EXPANSION = True
 
 
 def reset_hs_code_search_limit() -> None:
@@ -60,6 +65,96 @@ def get_retriever():
     return _retriever
 
 
+def get_query_expander():
+    """검색 쿼리 확장용 LLM (Lazy Loading)"""
+    global _query_expander
+    if _query_expander is not None:
+        return _query_expander
+    from langchain_openai import ChatOpenAI
+    _query_expander = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    return _query_expander
+
+
+def expand_hs_search_query(query: str) -> str:
+    """
+    HS 코드 검색 정확도를 높이기 위해 검색 문장을 확장합니다.
+    - 재질/용도/형태/구성 요소를 포함한 한두 문장 생성
+    - 과장/허위 정보 금지
+    """
+    if not USE_LLM_QUERY_EXPANSION:
+        return query
+    try:
+        llm = get_query_expander()
+        prompt = (
+            "다음 상품명/설명을 HS 코드 검색에 유리하도록 확장하세요.\n"
+            "- 재질/용도/형태/구성 요소 중심\n"
+            "- 과장/허위 금지\n"
+            "- 1~2문장, 120자 이내\n"
+            f"상품: {query}\n"
+            "확장 검색문장:"
+        )
+        resp = llm.invoke(prompt)
+        expanded = (resp.content or "").strip()
+        # 너무 길면 축약
+        if len(expanded) > 120:
+            expanded = expanded[:120].strip()
+        return expanded or query
+    except Exception:
+        return query
+
+
+def _select_rag_snippet(text: str, hs_code: Optional[str], item_name: Optional[str]) -> str:
+    """RAG 원문에서 인용할 문장을 선택 (그대로 인용)."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return text.strip()
+
+    # HS 코드 포함 문장 우선
+    if hs_code:
+        hs_digits = re.sub(r"\D", "", hs_code)
+        for ln in lines:
+            if hs_digits and hs_digits in re.sub(r"\D", "", ln):
+                return ln
+
+    # 물품명 토큰 포함 문장 우선
+    if item_name:
+        tokens = [t for t in re.split(r"\s+", item_name) if len(t) > 1]
+        for ln in lines:
+            if any(tok in ln for tok in tokens):
+                return ln
+
+    # 기본: 첫 문장 반환
+    return lines[0]
+
+
+def get_rag_snippet_for_candidate(item_name: str, hs_code: str, llm_snippet: Optional[str] = None) -> str:
+    """
+    RAG 검색 결과에서 원문 그대로 인용할 문장을 반환합니다.
+    - LLM이 제시한 인용이 실제 DB 문장에 포함되면 우선 사용
+    - 아니면 검색 결과에서 가장 관련 문장을 자동 선택
+    """
+    try:
+        retriever = get_retriever()
+        docs = retriever.invoke(f"{item_name} {hs_code}")
+        texts = [d.page_content for d in docs if getattr(d, "page_content", None)]
+
+        # LLM 인용이 실제 문서에 포함되면 그대로 사용
+        if llm_snippet:
+            for t in texts:
+                if llm_snippet in t:
+                    return llm_snippet
+
+        # 문서에서 직접 문장 선택
+        for t in texts:
+            snippet = _select_rag_snippet(t, hs_code, item_name)
+            if snippet:
+                return snippet
+    except Exception:
+        pass
+
+    return llm_snippet or ""
+
+
 # ===== HS Code & Tax Finder 도구 =====
 
 @tool("hs_code_search")
@@ -83,9 +178,9 @@ def hs_code_search(query: str) -> str:
     # 하드 리밋: 에이전트 1회 실행당 최대 3회까지만 실제 검색 수행
     if _hs_code_search_call_count > 3:
         return (
-            "hs_code_search 도구 호출 제한(3회)을 초과했습니다. "
-            "지금까지의 검색 결과와 관세 규정을 바탕으로 가장 적절한 HS 코드를 선택하고, "
-            "추가 검색 없이 최종 HS 코드와 관세율을 정리해서 답변을 마무리하세요."
+            "[검색 제한 초과] 더 이상 hs_code_search 도구를 호출할 수 없습니다. "
+            "반드시 지금까지 수집한 정보를 바탕으로 최종 답변을 작성하세요. "
+            "추가 도구 호출 없이 [결과] 형식으로 HS 코드와 관세율을 즉시 응답하세요."
         )
 
     # 긴 문장은 핵심 키워드 2~3개로 자동 축약 (도메인 검색 팁 반영)
@@ -103,12 +198,16 @@ def hs_code_search(query: str) -> str:
     else:
         processed_query = raw.strip() or query
 
-    processed_query_short = shorten(processed_query, width=60, placeholder="...")
+    # LLM 기반 검색 쿼리 확장
+    expanded_query = expand_hs_search_query(processed_query)
+    final_query = f"{processed_query} {expanded_query}".strip() if expanded_query else processed_query
+
+    processed_query_short = shorten(final_query, width=120, placeholder="...")
     print(f"[Tool] hs_code_search 실제 검색어: {processed_query_short}")
 
     try:
         retriever = get_retriever()
-        retrieved_docs = retriever.invoke(processed_query)
+        retrieved_docs = retriever.invoke(final_query)
         if not retrieved_docs:
             return f"'{processed_query}'에 대한 HS 코드 정보를 찾을 수 없습니다."
         return "\n\n".join([doc.page_content for doc in retrieved_docs])
@@ -150,9 +249,9 @@ def tariff_search_by_hs_code(hs_code: str) -> str:
     # 하드 리밋: 에이전트 1회 실행당 최대 5회까지만 상세 관세 조회
     if _tariff_search_call_count > 5:
         return (
-            "tariff_search_by_hs_code 도구 호출 제한(5회)을 초과했습니다. "
-            "지금까지 조회한 HS 코드 후보들 중에서 가장 합리적인 세율을 선택하고, "
-            "추가 조회 없이 최종 관세율과 분류 근거를 정리해서 답변을 마무리하세요."
+            "[조회 제한 초과] 더 이상 tariff_search_by_hs_code 도구를 호출할 수 없습니다. "
+            "반드시 지금까지 수집한 정보를 바탕으로 최종 답변을 작성하세요. "
+            "추가 도구 호출 없이 [결과] 형식으로 HS 코드와 관세율을 즉시 응답하세요."
         )
 
     if TARIFF_DF is None:
@@ -208,15 +307,51 @@ def exchange_rate_loader(target_currency: str = "USD") -> Dict[str, Any]:
     특정 국가의 통화(target_currency)와 대한민국 원(KRW) 사이의 현재 환율을 가져옵니다.
     
     Args:
-        target_currency: 조회할 통화 코드 (기본값: USD, 예: EUR, JPY, CNY)
+        target_currency: 조회할 통화 코드 (기본값: USD, 예: EUR, JPY, CNY, KRW)
     
     Returns:
         환율 정보 딕셔너리 {"currency": str, "rate": float, "source": str}
     """
     print(f"[Tool] exchange_rate_loader 실행: currency={target_currency}")
     
+    # KRW(원화)인 경우 환율 1.0 (변환 불필요)
+    if target_currency.upper() == "KRW":
+        return {
+            "currency": "KRW",
+            "rate": 1.0,
+            "source": "KRW (no conversion needed)"
+        }
+    
     api_key = os.getenv("EXCHANGERATE_API_KEY")
-    default_rates = {"USD": 1350.0, "EUR": 1450.0, "JPY": 9.0, "CNY": 185.0}
+    # 기본 환율 (API 없을 때 사용, 2024년 기준 대략적 값)
+    default_rates = {
+        "USD": 1350.0,   # 미국 달러
+        "EUR": 1450.0,   # 유로
+        "JPY": 9.0,      # 일본 엔
+        "CNY": 185.0,    # 중국 위안
+        "GBP": 1700.0,   # 영국 파운드
+        "AUD": 880.0,    # 호주 달러
+        "CAD": 1000.0,   # 캐나다 달러
+        "CHF": 1500.0,   # 스위스 프랑
+        "HKD": 175.0,    # 홍콩 달러
+        "SGD": 1000.0,   # 싱가포르 달러
+        "TWD": 42.0,     # 대만 달러
+        "THB": 38.0,     # 태국 바트
+        "VND": 0.055,    # 베트남 동
+        "INR": 16.0,     # 인도 루피
+        "MYR": 285.0,    # 말레이시아 링깃
+        "PHP": 24.0,     # 필리핀 페소
+        "IDR": 0.085,    # 인도네시아 루피아
+        "RUB": 15.0,     # 러시아 루블
+        "BRL": 270.0,    # 브라질 레알
+        "MXN": 78.0,     # 멕시코 페소
+        "NZD": 820.0,    # 뉴질랜드 달러
+        "SEK": 125.0,    # 스웨덴 크로나
+        "NOK": 125.0,    # 노르웨이 크로네
+        "DKK": 195.0,    # 덴마크 크로네
+        "AED": 370.0,    # UAE 디르함
+        "SAR": 360.0,    # 사우디 리얄
+    }
     
     if not api_key:
         rate = default_rates.get(target_currency.upper(), 1350.0)
@@ -303,7 +438,7 @@ def final_cost_calculator(
 @tool("pdf_report_exporter")
 def pdf_report_exporter(report_content: str, filename: str = "report.pdf") -> str:
     """
-    분석 결과를 담은 문자열(report_content)을 PDF 파일로 저장합니다.
+    분석 결과를 담은 문자열(report_content)을 전문적인 디자인의 PDF 파일로 저장합니다.
     
     Args:
         report_content: 보고서 내용 문자열
@@ -315,14 +450,21 @@ def pdf_report_exporter(report_content: str, filename: str = "report.pdf") -> st
     print(f"[Tool] pdf_report_exporter 실행: filename={filename}")
     
     try:
-        # 한글 폰트 등록 시도 (여러 경로 시도)
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.lib.colors import HexColor, black, white
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+        
+        # 한글 폰트 등록
         font_name = 'Helvetica'
         font_paths = [
-            './fonts/NanumGothic.ttf',                          # 프로젝트 내 fonts 폴더
-            'fonts/NanumGothic.ttf',                            # 상대 경로
-            '/usr/share/fonts/truetype/nanum/NanumGothic.ttf',  # Docker/Linux 시스템 폰트
-            'NanumGothic.ttf',                                  # 현재 디렉토리
-            os.path.join(os.path.dirname(__file__), '..', 'fonts', 'NanumGothic.ttf'),  # app 상위 fonts
+            './fonts/NanumGothic.ttf',
+            'fonts/NanumGothic.ttf',
+            '/usr/share/fonts/truetype/nanum/NanumGothic.ttf',
+            'NanumGothic.ttf',
+            os.path.join(os.path.dirname(__file__), '..', 'fonts', 'NanumGothic.ttf'),
         ]
         
         for font_path in font_paths:
@@ -335,21 +477,116 @@ def pdf_report_exporter(report_content: str, filename: str = "report.pdf") -> st
             except Exception:
                 continue
         
-        if font_name == 'Helvetica':
-            print("[Tool] Warning: NanumGothic font not found. Using Helvetica (한글 깨짐 가능).")
+        # 문서 생성
+        doc = SimpleDocTemplate(
+            filename,
+            pagesize=A4,
+            rightMargin=20*mm,
+            leftMargin=20*mm,
+            topMargin=20*mm,
+            bottomMargin=20*mm
+        )
         
-        c = canvas.Canvas(filename, pagesize=letter)
-        width, height = letter
-        c.setFont(font_name, 10)
+        # 스타일 정의
+        styles = getSampleStyleSheet()
         
-        text_object = c.beginText(40, height - 40)
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontName=font_name,
+            fontSize=14,
+            textColor=HexColor('#1a365d'),
+            alignment=TA_CENTER,
+            spaceAfter=12,
+            spaceBefore=0,
+        )
+        
+        section_style = ParagraphStyle(
+            'CustomSection',
+            parent=styles['Heading2'],
+            fontName=font_name,
+            fontSize=10,
+            textColor=HexColor('#2c5282'),
+            spaceBefore=10,
+            spaceAfter=6,
+            borderColor=HexColor('#e2e8f0'),
+            borderWidth=0,
+            borderPadding=4,
+        )
+        
+        body_style = ParagraphStyle(
+            'CustomBody',
+            parent=styles['Normal'],
+            fontName=font_name,
+            fontSize=9,
+            textColor=HexColor('#2d3748'),
+            spaceBefore=2,
+            spaceAfter=2,
+            leading=14,
+        )
+        
+        bullet_style = ParagraphStyle(
+            'CustomBullet',
+            parent=styles['Normal'],
+            fontName=font_name,
+            fontSize=9,
+            textColor=HexColor('#4a5568'),
+            leftIndent=15,
+            spaceBefore=1,
+            spaceAfter=1,
+            leading=13,
+        )
+        
+        # 콘텐츠 빌드
+        story = []
+        
+        # 헤더 라인
+        story.append(HRFlowable(width="100%", thickness=2, color=HexColor('#3182ce'), spaceBefore=0, spaceAfter=10))
+        
+        # 제목
+        story.append(Paragraph("HS 코드 및 수입 원가 분석 보고서", title_style))
+        
+        # 날짜
+        from datetime import datetime
+        date_style = ParagraphStyle('Date', parent=body_style, alignment=TA_CENTER, textColor=HexColor('#718096'), fontSize=8)
+        story.append(Paragraph(f"작성일: {datetime.now().strftime('%Y년 %m월 %d일')}", date_style))
+        
+        story.append(HRFlowable(width="100%", thickness=1, color=HexColor('#e2e8f0'), spaceBefore=10, spaceAfter=15))
+        
+        # 본문 파싱
         for line in report_content.split('\n'):
-            # 마크다운 기호 제거
-            clean_line = line.replace('#', '').replace('*', '').replace('>', '')
-            text_object.textLine(clean_line)
+            s = line.strip()
+            if not s:
+                story.append(Spacer(1, 4))
+                continue
+            
+            # 마크다운 정리
+            clean = s.replace('**', '').replace('*', '').replace('>', '').strip()
+            if not clean:
+                continue
+            
+            # 섹션 제목 (## 또는 #)
+            if s.startswith('## ') or s.startswith('# '):
+                section_text = clean.lstrip('# ').strip()
+                story.append(Spacer(1, 6))
+                story.append(HRFlowable(width="30%", thickness=1, color=HexColor('#3182ce'), spaceBefore=0, spaceAfter=4))
+                story.append(Paragraph(section_text, section_style))
+            # 불릿 리스트
+            elif s.startswith('- ') or s.startswith('* '):
+                item_text = clean.lstrip('-* ').strip()
+                story.append(Paragraph(f"• {item_text}", bullet_style))
+            # 일반 본문
+            else:
+                story.append(Paragraph(clean, body_style))
         
-        c.drawText(text_object)
-        c.save()
+        # 푸터
+        story.append(Spacer(1, 20))
+        story.append(HRFlowable(width="100%", thickness=1, color=HexColor('#e2e8f0'), spaceBefore=10, spaceAfter=6))
+        footer_style = ParagraphStyle('Footer', parent=body_style, alignment=TA_CENTER, textColor=HexColor('#a0aec0'), fontSize=7)
+        story.append(Paragraph("본 보고서는 TradeSimple AI에 의해 자동 생성되었습니다. 실제 수입 시 관세사 확인을 권장합니다.", footer_style))
+        
+        # PDF 생성
+        doc.build(story)
         
         return f"PDF 보고서가 '{filename}'로 성공적으로 저장되었습니다."
     except Exception as e:
@@ -360,6 +597,7 @@ def pdf_report_exporter(report_content: str, filename: str = "report.pdf") -> st
 def word_report_exporter(report_content: str, filename: str = "report.docx") -> str:
     """
     분석 결과를 담은 문자열(report_content)을 Word 파일로 저장합니다.
+    제목·섹션·본문 스타일과 적절한 여백/줄바꿈을 적용한 전문적인 레이아웃으로 생성합니다.
     
     Args:
         report_content: 보고서 내용 문자열
@@ -371,15 +609,72 @@ def word_report_exporter(report_content: str, filename: str = "report.docx") -> 
     print(f"[Tool] word_report_exporter 실행: filename={filename}")
     
     try:
+        from docx.shared import Pt, Inches, Twips
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml.ns import qn
+
         doc = DocxDocument()
-        doc.add_heading('HS 코드 및 수입 원가 분석 보고서', level=1)
-        
-        # 마크다운 기호 제거 후 단락 추가
-        for line in report_content.split('\n'):
-            clean_line = line.replace('#', '').replace('*', '').replace('>', '').strip()
-            if clean_line:
-                doc.add_paragraph(clean_line)
-        
+
+        # 문서 여백 설정 (좌우 1인치)
+        for section in doc.sections:
+            section.left_margin = Inches(1)
+            section.right_margin = Inches(1)
+            section.top_margin = Inches(0.8)
+            section.bottom_margin = Inches(0.8)
+
+        def add_styled_paragraph(text: str, font_size: int = 10, bold: bool = False, 
+                                  space_after: int = 6, align_center: bool = False):
+            """스타일 적용 단락 추가 (줄바꿈 자동 처리)."""
+            p = doc.add_paragraph()
+            run = p.add_run(text)
+            run.font.name = "Nanum Gothic"
+            run.font.size = Pt(font_size)
+            run.bold = bold
+            # 한글 폰트 설정 (동아시아 폰트)
+            run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Nanum Gothic')
+            # 단락 여백
+            p.paragraph_format.space_after = Pt(space_after)
+            p.paragraph_format.line_spacing = 1.15
+            if align_center:
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            return p
+
+        # 제목 (12pt, 굵게, 가운데)
+        add_styled_paragraph(
+            "HS 코드 및 수입 원가 분석 보고서",
+            font_size=12, bold=True, space_after=12, align_center=True
+        )
+
+        # 본문: 마크다운 라인을 섹션/단락으로 구분
+        for line in report_content.split("\n"):
+            s = line.strip()
+            if not s:
+                # 빈 줄은 작은 여백으로 처리
+                p = doc.add_paragraph()
+                p.paragraph_format.space_after = Pt(4)
+                continue
+            
+            # 마크다운 기호 정리
+            clean = s.replace("**", "").replace("*", "").replace(">", "").strip()
+            
+            # ## 섹션 제목
+            if s.startswith("## ") or s.startswith("# "):
+                section_title = clean.lstrip("# ").strip()
+                add_styled_paragraph(section_title, font_size=10, bold=True, space_after=6)
+            # 불릿 리스트
+            elif s.startswith("- ") or s.startswith("* "):
+                item_text = clean.lstrip("-* ").strip()
+                p = doc.add_paragraph(style="List Bullet")
+                run = p.add_run(item_text)
+                run.font.name = "Nanum Gothic"
+                run.font.size = Pt(9)
+                run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Nanum Gothic')
+                p.paragraph_format.space_after = Pt(3)
+                p.paragraph_format.line_spacing = 1.15
+            # 일반 본문
+            else:
+                add_styled_paragraph(clean, font_size=9, bold=False, space_after=4)
+
         doc.save(filename)
         return f"Word 보고서가 '{filename}'로 성공적으로 저장되었습니다."
     except Exception as e:
