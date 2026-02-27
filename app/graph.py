@@ -658,29 +658,36 @@ async def run_agent_stream(
     user_input: str,
     current_state: Optional[Dict] = None,
     report_id: Optional[int] = None,
+    thread_id: Optional[str] = None,
 ):
     """
     에이전트 실행 + 실시간 진행 상황 스트리밍 (async generator).
     yield: {"message": str, "state": dict}
+
+    Args:
+        thread_id: LangSmith 추적용 스레드 ID (세션 ID와 동일하게 사용하면
+                   analyze → calculate 전 과정이 하나의 스레드로 묶임)
     """
     graph = get_graph()
-    
+
     if current_state is None:
         state = get_initial_state()
     else:
         state = current_state.copy()
-    
+
     state["messages"] = state.get("messages", []) + [HumanMessage(content=user_input)]
     if report_id is not None:
         state["report_id"] = report_id
-    
+
+    lang_config = {"configurable": {"thread_id": thread_id}} if thread_id else {}
+
     current = dict(state)
-    async for event in graph.astream(state, stream_mode="updates"):
+    async for event in graph.astream(state, lang_config, stream_mode="updates"):
         for node_name, update in event.items():
             current = {**current, **update}
             msg = _status_message(node_name, current)
             yield {"message": msg, "state": current}
-    
+
     yield {"message": "✅ 처리 완료", "state": current}
 
 
@@ -690,16 +697,18 @@ async def continue_after_hs_selection(
     selected_rationale: str,
     current_state: Dict[str, Any],
     report_id: Optional[int] = None,
+    thread_id: Optional[str] = None,
 ):
     """
     사용자가 HS 코드를 선택한 후 계산을 계속 진행 (async generator).
-    
+
     Args:
         selected_hs_code: 사용자가 선택한 HS 코드
         selected_tariff_rate: 선택한 HS 코드의 관세율 (0이면 조회 필요)
         selected_rationale: 선택 근거
         current_state: 현재 상태
         report_id: 보고서 파일 번호
+        thread_id: LangSmith 추적용 스레드 ID (analyze 단계와 동일한 세션 ID 사용)
     """
     from app.tools import tariff_search_by_hs_code
     
@@ -741,11 +750,13 @@ async def continue_after_hs_selection(
     )
     state["messages"] = state.get("messages", []) + [selection_msg]
     
+    lang_config = {"configurable": {"thread_id": thread_id}} if thread_id else {}
+
     current = dict(state)
-    async for event in graph.astream(state, stream_mode="updates"):
+    async for event in graph.astream(state, lang_config, stream_mode="updates"):
         for node_name, update in event.items():
             current = {**current, **update}
             msg = _status_message(node_name, current)
             yield {"message": msg, "state": current}
-    
+
     yield {"message": "✅ 처리 완료", "state": current}

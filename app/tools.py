@@ -26,7 +26,7 @@ load_dotenv()
 # --- CSV 파일을 미리 로드하여 메모리에 저장 ---
 TARIFF_DF = None
 try:
-    TARIFF_DF = pd.read_csv("./data/tariff_by_hs.csv", encoding="cp949", dtype={"세번": str, "잠정세율": str})
+    TARIFF_DF = pd.read_csv("./data/tariff_by_hs.csv", encoding="cp949", dtype={"세번": str, "잠정세율 - B": str})
     print("tariff_by_hs.csv 파일을 성공적으로 로드했습니다.")
 except FileNotFoundError:
     print("경고: ./data/tariff_by_hs.csv 파일을 찾을 수 없습니다.")
@@ -257,9 +257,31 @@ def tariff_search_by_hs_code(hs_code: str) -> str:
     if TARIFF_DF is None:
         return "오류: 관세율 정보 파일(tariff_by_hs.csv)이 로드되지 않았습니다."
 
-    hs_code_cleaned = hs_code.replace('.', '').replace('-', '')
-    result_df = TARIFF_DF[
-        TARIFF_DF['세번'].astype(str).str.replace('[.-]', '', regex=True).str.startswith(hs_code_cleaned[:6])]
+    # 입력 HS 코드 정규화: 구분자 제거 + leading zeros 제거
+    # CSV의 세번 컬럼은 앞자리 0이 없는 형태로 저장됨 (예: '0307494010' → '307494010')
+    hs_code_cleaned = hs_code.replace('.', '').replace('-', '').lstrip('0')
+
+    # CSV 세번도 leading zeros 제거 후 비교
+    csv_codes = TARIFF_DF['세번'].astype(str).str.lstrip('0')
+
+    # 1. 정확히 일치하는 행 우선 검색
+    exact_mask = csv_codes == hs_code_cleaned
+    if exact_mask.any():
+        result_df = TARIFF_DF[exact_mask]
+    else:
+        # 2. 상위 자리수로 prefix 검색 (6자리 → 4자리 → 2자리 순으로 축소)
+        result_df = pd.DataFrame()
+        for prefix_len in (6, 4, 2):
+            prefix = hs_code_cleaned[:prefix_len] if len(hs_code_cleaned) >= prefix_len else hs_code_cleaned
+            prefix_mask = csv_codes.str.startswith(prefix)
+            if prefix_mask.any():
+                result_df = TARIFF_DF[prefix_mask]
+                break
+
+        if not result_df.empty:
+            # 가장 세부적인 (세번 길이가 긴) 행만 남김 — 챕터 헤더 행 제외
+            max_len = result_df['세번'].astype(str).str.len().max()
+            result_df = result_df[result_df['세번'].astype(str).str.len() == max_len]
 
     if result_df.empty:
         return f"HS 코드 '{hs_code}'에 해당하는 관세율 정보를 찾을 수 없습니다."
@@ -267,10 +289,10 @@ def tariff_search_by_hs_code(hs_code: str) -> str:
     target_row = result_df.iloc[0]
     item_name = target_row.get('한글품명', '알 수 없음')
 
-    # 세율 정보 추출
-    basic_rate_str = target_row.get('기본세율', '정보 없음')
-    provisional_rate_str = target_row.get('잠정세율', '정보 없음')
-    wto_rate_str = target_row.get('WTO협정세율', '정보 없음')
+    # 세율 정보 추출 (실제 CSV 컬럼명 사용)
+    basic_rate_str = target_row.get('기본세율 - A', '정보 없음')
+    provisional_rate_str = target_row.get('잠정세율 - B', '정보 없음')
+    wto_rate_str = target_row.get('WTO협정세율 - C', '정보 없음')
 
     # 단위 정보 추출
     weight_unit = target_row.get('중량단위', '정보 없음')
@@ -596,88 +618,224 @@ def pdf_report_exporter(report_content: str, filename: str = "report.pdf") -> st
 @tool("word_report_exporter")
 def word_report_exporter(report_content: str, filename: str = "report.docx") -> str:
     """
-    분석 결과를 담은 문자열(report_content)을 Word 파일로 저장합니다.
-    제목·섹션·본문 스타일과 적절한 여백/줄바꿈을 적용한 전문적인 레이아웃으로 생성합니다.
-    
+    분석 결과를 담은 문자열(report_content)을 전문적인 디자인의 Word 파일로 저장합니다.
+    파란 헤더 배너, 섹션별 배경색, 인라인 볼드 처리, 푸터를 포함합니다.
+
     Args:
-        report_content: 보고서 내용 문자열
+        report_content: 보고서 내용 문자열 (마크다운)
         filename: 저장할 파일명 (기본값: report.docx)
-    
+
     Returns:
         저장 결과 메시지
     """
     print(f"[Tool] word_report_exporter 실행: filename={filename}")
-    
+
     try:
-        from docx.shared import Pt, Inches, Twips
+        import re as _re
+        from datetime import datetime as _dt
+        from docx.shared import Pt, RGBColor, Inches, Cm
         from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.oxml.ns import qn
+        from docx.oxml import OxmlElement
+
+        FONT = "Nanum Gothic"
+        BLUE_DARK_HEX  = "1A366B"   # header bg
+        BLUE_MID       = RGBColor(0x2B, 0x5B, 0xA6)
+        BLUE_MID_HEX   = "2B5BA6"
+        BLUE_LIGHT_HEX = "EBF2FB"   # section header bg
+        GRAY_LIGHT_HEX = "F7F7F7"   # footer bg
+        WHITE          = RGBColor(0xFF, 0xFF, 0xFF)
+        GRAY_TEXT      = RGBColor(0x88, 0x88, 0x88)
 
         doc = DocxDocument()
 
-        # 문서 여백 설정 (좌우 1인치)
-        for section in doc.sections:
-            section.left_margin = Inches(1)
-            section.right_margin = Inches(1)
-            section.top_margin = Inches(0.8)
-            section.bottom_margin = Inches(0.8)
+        # ── 문서 여백 ───────────────────────────────────────────────────
+        for sec in doc.sections:
+            sec.left_margin   = Inches(1.0)
+            sec.right_margin  = Inches(1.0)
+            sec.top_margin    = Inches(0.8)
+            sec.bottom_margin = Inches(0.8)
 
-        def add_styled_paragraph(text: str, font_size: int = 10, bold: bool = False, 
-                                  space_after: int = 6, align_center: bool = False):
-            """스타일 적용 단락 추가 (줄바꿈 자동 처리)."""
-            p = doc.add_paragraph()
-            run = p.add_run(text)
-            run.font.name = "Nanum Gothic"
-            run.font.size = Pt(font_size)
+        # ── XML 헬퍼 ───────────────────────────────────────────────────
+        def _set_cell_shd(cell, fill_hex):
+            tc = cell._tc
+            tcPr = tc.get_or_add_tcPr()
+            shd = OxmlElement("w:shd")
+            shd.set(qn("w:val"), "clear")
+            shd.set(qn("w:color"), "auto")
+            shd.set(qn("w:fill"), fill_hex)
+            tcPr.append(shd)
+
+        def _set_para_shd(para, fill_hex):
+            pPr = para._element.get_or_add_pPr()
+            shd = OxmlElement("w:shd")
+            shd.set(qn("w:val"), "clear")
+            shd.set(qn("w:color"), "auto")
+            shd.set(qn("w:fill"), fill_hex)
+            pPr.append(shd)
+
+        def _set_para_left_border(para, color_hex=BLUE_MID_HEX, sz="28"):
+            pPr = para._element.get_or_add_pPr()
+            pBdr = OxmlElement("w:pBdr")
+            left = OxmlElement("w:left")
+            left.set(qn("w:val"), "single")
+            left.set(qn("w:sz"), sz)
+            left.set(qn("w:space"), "8")
+            left.set(qn("w:color"), color_hex)
+            pBdr.append(left)
+            pPr.append(pBdr)
+
+        def _remove_table_borders(table):
+            tbl_el = table._element
+            tblPr = tbl_el.find(qn("w:tblPr"))
+            if tblPr is None:
+                tblPr = OxmlElement("w:tblPr")
+                tbl_el.insert(0, tblPr)
+            old = tblPr.find(qn("w:tblBorders"))
+            if old is not None:
+                tblPr.remove(old)
+            tblBorders = OxmlElement("w:tblBorders")
+            for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+                b = OxmlElement(f"w:{side}")
+                b.set(qn("w:val"), "none")
+                b.set(qn("w:sz"), "0")
+                b.set(qn("w:space"), "0")
+                b.set(qn("w:color"), "auto")
+                tblBorders.append(b)
+            tblPr.append(tblBorders)
+
+        def _add_run(para, text, bold=False, size=10, color=None, italic=False):
+            """단락에 런 추가 (한글 폰트 포함)."""
+            run = para.add_run(text)
+            run.font.name = FONT
+            run.font.size = Pt(size)
             run.bold = bold
-            # 한글 폰트 설정 (동아시아 폰트)
-            run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Nanum Gothic')
-            # 단락 여백
-            p.paragraph_format.space_after = Pt(space_after)
-            p.paragraph_format.line_spacing = 1.15
-            if align_center:
-                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            return p
+            run.italic = italic
+            if color:
+                run.font.color.rgb = color
+            # 동아시아 폰트 명시 설정
+            rPr = run._element.get_or_add_rPr()
+            rFonts = rPr.find(qn("w:rFonts"))
+            if rFonts is None:
+                rFonts = OxmlElement("w:rFonts")
+                rPr.insert(0, rFonts)
+            rFonts.set(qn("w:ascii"), FONT)
+            rFonts.set(qn("w:hAnsi"), FONT)
+            rFonts.set(qn("w:eastAsia"), FONT)
+            rFonts.set(qn("w:cs"), FONT)
+            return run
 
-        # 제목 (12pt, 굵게, 가운데)
-        add_styled_paragraph(
-            "HS 코드 및 수입 원가 분석 보고서",
-            font_size=12, bold=True, space_after=12, align_center=True
+        def _parse_inline(para, text, base_size=9, base_bold=False, base_color=None):
+            """**bold** 인라인 마커를 처리하여 런을 분리 추가."""
+            parts = _re.split(r"\*\*(.+?)\*\*", text)
+            for i, part in enumerate(parts):
+                if not part:
+                    continue
+                is_bold = (i % 2 == 1) or base_bold
+                _add_run(para, part, bold=is_bold, size=base_size, color=base_color)
+
+        # ── 파란 헤더 배너 (1×1 표로 구현) ─────────────────────────────
+        header_tbl = doc.add_table(rows=1, cols=1)
+        header_tbl.style = "Table Grid"
+        _remove_table_borders(header_tbl)
+
+        hcell = header_tbl.cell(0, 0)
+        _set_cell_shd(hcell, BLUE_DARK_HEX)
+
+        # 셀 내부 여백 (상하 120, 좌우 200 DXA)
+        tc = hcell._tc
+        tcPr = tc.get_or_add_tcPr()
+        tcMar = OxmlElement("w:tcMar")
+        for side, val in (("top", "120"), ("bottom", "120"), ("left", "200"), ("right", "200")):
+            m = OxmlElement(f"w:{side}")
+            m.set(qn("w:w"), val)
+            m.set(qn("w:type"), "dxa")
+            tcMar.append(m)
+        tcPr.append(tcMar)
+
+        # 헤더 제목
+        hp = hcell.paragraphs[0]
+        hp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        hp.paragraph_format.space_before = Pt(8)
+        hp.paragraph_format.space_after  = Pt(2)
+        _add_run(hp, "HS 코드 및 수입 원가 분석 보고서", bold=True, size=15, color=WHITE)
+
+        # 헤더 부제
+        sp = hcell.add_paragraph()
+        sp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        sp.paragraph_format.space_before = Pt(0)
+        sp.paragraph_format.space_after  = Pt(8)
+        _add_run(
+            sp,
+            f"TradeSimple AI  |  작성일: {_dt.now().strftime('%Y년 %m월 %d일')}",
+            bold=False, size=9,
+            color=RGBColor(0xCC, 0xD9, 0xF5),
         )
 
-        # 본문: 마크다운 라인을 섹션/단락으로 구분
+        # 헤더 아래 여백
+        doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+        # ── 본문: 마크다운 라인 파싱 ────────────────────────────────────
         for line in report_content.split("\n"):
             s = line.strip()
+
+            # 빈 줄
             if not s:
-                # 빈 줄은 작은 여백으로 처리
-                p = doc.add_paragraph()
-                p.paragraph_format.space_after = Pt(4)
+                sp = doc.add_paragraph()
+                sp.paragraph_format.space_after = Pt(2)
                 continue
-            
-            # 마크다운 기호 정리
-            clean = s.replace("**", "").replace("*", "").replace(">", "").strip()
-            
-            # ## 섹션 제목
+
+            # H1 / H2 섹션 헤더
             if s.startswith("## ") or s.startswith("# "):
-                section_title = clean.lstrip("# ").strip()
-                add_styled_paragraph(section_title, font_size=10, bold=True, space_after=6)
+                title_text = _re.sub(r"^#+\s*", "", s).strip()
+                title_text = _re.sub(r"\*\*(.+?)\*\*", r"\1", title_text)
+
+                p = doc.add_paragraph()
+                p.paragraph_format.space_before = Pt(12)
+                p.paragraph_format.space_after  = Pt(5)
+                p.paragraph_format.left_indent  = Cm(0.5)
+                _set_para_shd(p, BLUE_LIGHT_HEX)
+                _set_para_left_border(p)
+                _add_run(p, title_text, bold=True, size=11, color=BLUE_MID)
+
             # 불릿 리스트
             elif s.startswith("- ") or s.startswith("* "):
-                item_text = clean.lstrip("-* ").strip()
-                p = doc.add_paragraph(style="List Bullet")
-                run = p.add_run(item_text)
-                run.font.name = "Nanum Gothic"
-                run.font.size = Pt(9)
-                run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Nanum Gothic')
-                p.paragraph_format.space_after = Pt(3)
+                item_text = _re.sub(r"^[-*]\s+", "", s).strip()
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent  = Cm(0.9)
+                p.paragraph_format.space_after  = Pt(3)
                 p.paragraph_format.line_spacing = 1.15
-            # 일반 본문
+                _add_run(p, "▸  ", bold=False, size=9, color=BLUE_MID)
+                _parse_inline(p, item_text, base_size=9)
+
+            # 일반 본문 (인용 블록 > 포함)
             else:
-                add_styled_paragraph(clean, font_size=9, bold=False, space_after=4)
+                clean = _re.sub(r"^>+\s*", "", s).strip()
+                p = doc.add_paragraph()
+                p.paragraph_format.space_after  = Pt(3)
+                p.paragraph_format.line_spacing = 1.15
+                _parse_inline(p, clean, base_size=9)
+
+        # ── 푸터 ────────────────────────────────────────────────────────
+        doc.add_paragraph().paragraph_format.space_after = Pt(8)
+        fp = doc.add_paragraph()
+        _set_para_shd(fp, GRAY_LIGHT_HEX)
+        fp.paragraph_format.space_before = Pt(6)
+        fp.paragraph_format.space_after  = Pt(6)
+        fp.paragraph_format.left_indent  = Cm(0.3)
+        _add_run(
+            fp,
+            "※ 본 보고서는 TradeSimple AI에 의해 자동 생성되었습니다. "
+            "실제 수입 시 관세사 또는 세관의 확인을 권장합니다.",
+            bold=False, size=8, color=GRAY_TEXT,
+        )
 
         doc.save(filename)
         return f"Word 보고서가 '{filename}'로 성공적으로 저장되었습니다."
+
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return f"Word 저장 중 오류 발생: {str(e)}"
 
 

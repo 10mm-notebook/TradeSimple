@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
-from app.tools import hs_code_search, tariff_search_by_hs_code, reset_hs_code_search_limit, get_rag_snippet_for_candidate
+from app.tools import hs_code_search, tariff_search_by_hs_code, reset_hs_code_search_limit
 
 
 # ReAct 에이전트용 시스템 프롬프트 (후보 3개 반환용 - 관세율 조회 없이 HS 코드만)
@@ -29,28 +29,29 @@ HS_CODE_FINDER_CANDIDATES_PROMPT = """당신은 HS 코드 분류 전문가입니
 ## 작업 순서
 1. hs_code_search로 물품의 HS 코드를 검색합니다.
 2. 검색 결과에서 **가장 적합한 후보 3개**를 선별합니다.
-3. 3개 후보를 적합도 순으로 정렬하여 반환합니다.
+3. 각 후보의 관세율을 tariff_search_by_hs_code로 조회합니다.
+4. 3개 후보를 정확도 순으로 정렬하여 반환합니다.
 
 ## 최종 응답 형식 (필수!)
 반드시 아래 형식으로 **3개 후보**를 응답하세요:
 
 [후보1] (가장 유력)
 - HS 코드: XXXX.XX-XXXX
+- 관세율: X%
 - 품명: [해당 HS 코드의 품명]
 - 적합도: [왜 이 코드가 적합한지 한 줄 설명]
-- 검색근거: [hs_code_search에서 반환된 관세청 DB **원문 문장 그대로 인용**]
 
 [후보2]
 - HS 코드: XXXX.XX-XXXX
+- 관세율: X%
 - 품명: [해당 HS 코드의 품명]
 - 적합도: [왜 이 코드가 적합한지 한 줄 설명]
-- 검색근거: [hs_code_search에서 반환된 관세청 DB **원문 문장 그대로 인용**]
 
 [후보3]
 - HS 코드: XXXX.XX-XXXX
+- 관세율: X%
 - 품명: [해당 HS 코드의 품명]
 - 적합도: [왜 이 코드가 적합한지 한 줄 설명]
-- 검색근거: [hs_code_search에서 반환된 관세청 DB **원문 문장 그대로 인용**]
 """
 
 # ReAct 에이전트용 시스템 프롬프트
@@ -108,10 +109,6 @@ class HSCodeFinderAgent:
     LLM이 스스로 Thought → Action → Observation 루프를 수행합니다.
     """
     
-    # 최대 반복 횟수 (LLM 호출 + 도구 호출 합계)
-    # ReAct: LLM→도구→LLM→도구→... 패턴이므로 도구 3회 = 약 7~9 노드 전환
-    MAX_ITERATIONS = 15
-    
     def __init__(self, llm: Optional[ChatOpenAI] = None):
         # 비용과 레이트 리밋을 고려해 gpt-4o-mini 사용
         self.llm = llm or ChatOpenAI(model="gpt-4o-mini", temperature=0)
@@ -156,9 +153,7 @@ class HSCodeFinderAgent:
                     SystemMessage(content=HS_CODE_FINDER_SYSTEM_PROMPT),
                     input_message,
                 ]
-            },
-            # 최대 반복 횟수 제한 (무한 루프 방지)
-            config={"recursion_limit": self.MAX_ITERATIONS}
+            }
         )
         
         # 에이전트 메시지에서 결과 추출
@@ -215,9 +210,7 @@ class HSCodeFinderAgent:
                     SystemMessage(content=HS_CODE_FINDER_CANDIDATES_PROMPT),
                     input_message,
                 ]
-            },
-            # 최대 반복 횟수 제한 (무한 루프 방지)
-            config={"recursion_limit": self.MAX_ITERATIONS}
+            }
         )
         
         messages = result.get("messages", [])
@@ -253,14 +246,6 @@ class HSCodeFinderAgent:
                 "품명": item_name,
                 "적합도": "검색 결과 없음 - 직접 입력 필요",
             }]
-
-        # RAG 검색 근거는 반드시 DB 원문에서 인용 (LLM 요약 금지)
-        for cand in candidates:
-            cand["rag_context"] = get_rag_snippet_for_candidate(
-                item_name=item_name,
-                hs_code=cand.get("hs_code", ""),
-                llm_snippet=cand.get("rag_context", "")
-            )
         
         print(f"[HSCodeFinderAgent] 후보 {len(candidates)}개 반환")
         return {
@@ -269,7 +254,7 @@ class HSCodeFinderAgent:
         }
     
     def _extract_candidates(self, text: str) -> List[Dict[str, Any]]:
-        """텍스트에서 후보 3개 파싱 (관세율은 나중에 조회)."""
+        """텍스트에서 후보 3개 파싱."""
         candidates = []
         
         # [후보1], [후보2], [후보3] 섹션 파싱
@@ -277,6 +262,7 @@ class HSCodeFinderAgent:
         
         for section in sections[1:]:  # 첫 번째는 헤더 이전
             hs_code = self._extract_hs_code(section)
+            tariff_rate = self._extract_tariff_rate(section)
             
             # 품명 추출
             품명_match = re.search(r'품명[:\s]*(.+?)(?:\n|$)', section)
@@ -286,17 +272,12 @@ class HSCodeFinderAgent:
             적합도_match = re.search(r'적합도[:\s]*(.+?)(?:\n|$)', section)
             적합도 = 적합도_match.group(1).strip() if 적합도_match else ""
             
-            # 검색근거(RAG 컨텍스트) 추출
-            rag_match = re.search(r'검색근거[:\s]*(.+?)(?:\n\[후보|\n-\s*HS|$)', section, re.DOTALL)
-            rag_context = rag_match.group(1).strip() if rag_match else ""
-            
             if hs_code:
                 candidates.append({
                     "hs_code": hs_code,
-                    "tariff_rate": 0.0,  # 관세율은 선택 후 조회
+                    "tariff_rate": tariff_rate,
                     "품명": 품명[:50] if 품명 else "",
-                    "적합도": 적합도[:150] if 적합도 else "",
-                    "rag_context": rag_context if rag_context else "",  # RAG 검색 근거 (원문 인용)
+                    "적합도": 적합도[:100] if 적합도 else "",
                 })
         
         return candidates

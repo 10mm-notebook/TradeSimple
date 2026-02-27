@@ -15,16 +15,17 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 from contextlib import asynccontextmanager
 
+import json as _json
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from langchain_core.messages import HumanMessage, AIMessage
 
 # 프로젝트 루트를 Python 경로에 추가
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.state import get_initial_state
-from app.graph import get_graph, continue_after_hs_selection
+from app.graph import get_graph, continue_after_hs_selection, _status_message
 from api.schemas import (
     AnalyzeRequest, AnalyzeResponse, HSCodeCandidate,
     CalculateRequest, CalculateResponse,
@@ -105,7 +106,8 @@ async def analyze_input(request: AnalyzeRequest):
         state = get_initial_state()
         state["messages"] = state.get("messages", []) + [HumanMessage(content=request.message)]
 
-        result_state = await graph.ainvoke(state)
+        lang_config = {"configurable": {"thread_id": session_id}}
+        result_state = await graph.ainvoke(state, lang_config)
         print(f"[API] analyze - current_phase={result_state.get('current_phase')}")
 
         # 2. 세션 저장 (LangGraph 상태 그대로)
@@ -213,6 +215,7 @@ async def calculate_cost(request: CalculateRequest):
                 selected_rationale="사용자 선택",
                 current_state=state,
                 report_id=int(datetime.now().timestamp()),
+                thread_id=request.session_id,
             ):
                 last_state = chunk["state"]
             return last_state
@@ -255,6 +258,208 @@ async def calculate_cost(request: CalculateRequest):
             session_id=request.session_id,
             error=str(e)
         )
+
+
+@app.post("/api/v1/analyze/stream", tags=["HITL Flow"])
+async def analyze_input_stream(request: AnalyzeRequest):
+    """
+    1단계 스트리밍: 분석 진행 상황을 SSE로 실시간 전송
+
+    - 각 LangGraph 노드 실행 시 진행 메시지를 즉시 전송
+    - 최종 이벤트(done=True)에 HS 코드 후보 및 세션 정보 포함
+    """
+    session_id = request.session_id or str(uuid.uuid4())
+
+    async def event_generator():
+        from app.graph import get_graph
+        graph = get_graph()
+        final_state = None
+        current = get_initial_state()
+        current["messages"] = [HumanMessage(content=request.message)]
+
+        try:
+            lang_config = {"configurable": {"thread_id": session_id}}
+            async for event in graph.astream(current, lang_config, stream_mode="updates"):
+                for node_name, update in event.items():
+                    current = {**current, **update}
+                    msg = _status_message(node_name, current)
+                    payload = _json.dumps({"message": msg, "done": False}, ensure_ascii=False)
+                    yield f"data: {payload}\n\n"
+            final_state = current
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield f"data: {_json.dumps({'done': True, 'success': False, 'error': str(e), 'session_id': session_id}, ensure_ascii=False)}\n\n"
+            return
+
+        # 세션 저장
+        if final_state:
+            sessions[session_id] = {
+                "state": final_state,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+            }
+
+        # 최종 결과 이벤트
+        phase = (final_state or {}).get("current_phase", "")
+        candidates_raw = (final_state or {}).get("hs_code_candidates", []) or []
+        candidates = [
+            {
+                "hs_code": c.get("hs_code", ""),
+                "품명": c.get("품명", ""),
+                "적합도": c.get("적합도", ""),
+                "rag_context": c.get("rag_context", ""),
+            }
+            for c in candidates_raw[:3]
+        ]
+
+        last_msg = None
+        for msg in reversed((final_state or {}).get("messages", [])):
+            if isinstance(msg, AIMessage):
+                last_msg = msg.content
+                break
+
+        final_payload = {
+            "done": True,
+            "success": phase != "request_info",
+            "session_id": session_id,
+            "phase": (
+                "hs_code_selection" if phase == "hs_code_selection"
+                else "need_more_info" if phase in ("request_info", "waiting_input")
+                else "analyzing"
+            ),
+            "item_name": (final_state or {}).get("item_name"),
+            "quantity": (final_state or {}).get("quantity"),
+            "quantity_unit": (final_state or {}).get("quantity_unit"),
+            "unit_price": (final_state or {}).get("unit_price"),
+            "price_unit": (final_state or {}).get("price_unit"),
+            "total_foreign_price": (final_state or {}).get("total_foreign_price"),
+            "currency": (final_state or {}).get("currency"),
+            "exchange_rate": (final_state or {}).get("exchange_rate"),
+            "hs_code_candidates": candidates if phase == "hs_code_selection" else None,
+            "missing_info": (final_state or {}).get("missing_info"),
+            "message": last_msg or (
+                "HS 코드 후보를 찾았습니다. 가장 적합한 코드를 선택해주세요."
+                if phase == "hs_code_selection"
+                else "추가 정보가 필요합니다."
+            ),
+        }
+        yield f"data: {_json.dumps(final_payload, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@app.post("/api/v1/calculate/stream", tags=["HITL Flow"])
+async def calculate_cost_stream(request: CalculateRequest):
+    """
+    2단계 스트리밍: 비용 계산 진행 상황을 SSE로 실시간 전송
+
+    - 관세율 조회, 비용 계산, 보고서 생성 단계별 메시지 스트리밍
+    - 최종 이벤트(done=True)에 전체 계산 결과 및 보고서 경로 포함
+    """
+    async def event_generator():
+        try:
+            if request.session_id not in sessions:
+                yield f"data: {_json.dumps({'done': True, 'success': False, 'error': '세션을 찾을 수 없습니다. 먼저 /api/v1/analyze를 호출하세요.', 'session_id': request.session_id})}\n\n"
+                return
+
+            session = sessions[request.session_id]
+            state = session["state"].copy()
+
+            # 입력값 덮어쓰기
+            overrides = {
+                "item_name": request.item_name,
+                "quantity": request.quantity,
+                "quantity_unit": request.quantity_unit,
+                "unit_price": request.unit_price,
+                "price_unit": request.price_unit,
+                "total_foreign_price": request.total_foreign_price,
+                "currency": request.currency,
+            }
+            for k, v in overrides.items():
+                if v is not None:
+                    state[k] = v
+
+            if state.get("total_foreign_price") is None:
+                if state.get("quantity") and state.get("unit_price"):
+                    state["total_foreign_price"] = state["quantity"] * state["unit_price"]
+
+            final_state = None
+            report_id = int(datetime.now().timestamp())
+
+            async for event_data in continue_after_hs_selection(
+                selected_hs_code=request.selected_hs_code,
+                selected_tariff_rate=0.0,
+                selected_rationale="사용자 선택",
+                current_state=state,
+                report_id=report_id,
+                thread_id=request.session_id,
+            ):
+                final_state = event_data["state"]
+                msg = event_data["message"]
+                if not msg.startswith("✅"):
+                    payload = _json.dumps({"message": msg, "done": False}, ensure_ascii=False)
+                    yield f"data: {payload}\n\n"
+
+            # 세션 업데이트
+            if final_state:
+                session["state"] = final_state
+                session["updated_at"] = datetime.now().isoformat()
+
+            report_paths = (final_state or {}).get("report_paths") or {}
+            total_cost = (final_state or {}).get("total_cost") or 0
+
+            final_payload = {
+                "done": True,
+                "success": True,
+                "session_id": request.session_id,
+                "item_name": (final_state or {}).get("item_name"),
+                "quantity": (final_state or {}).get("quantity"),
+                "quantity_unit": (final_state or {}).get("quantity_unit"),
+                "unit_price": (final_state or {}).get("unit_price"),
+                "price_unit": (final_state or {}).get("price_unit"),
+                "total_foreign_price": (final_state or {}).get("total_foreign_price"),
+                "currency": (final_state or {}).get("currency"),
+                "hs_code": (final_state or {}).get("hs_code"),
+                "hs_code_rationale": (final_state or {}).get("hs_code_rationale"),
+                "tariff_rate": (final_state or {}).get("tariff_rate"),
+                "exchange_rate": (final_state or {}).get("exchange_rate"),
+                "total_krw": (
+                    ((final_state or {}).get("total_foreign_price") or 0)
+                    * ((final_state or {}).get("exchange_rate") or 0)
+                ),
+                "tax_amount": (final_state or {}).get("tax_amount"),
+                "vat_amount": (final_state or {}).get("vat_amount"),
+                "total_cost": total_cost,
+                "report_content": (final_state or {}).get("report_content"),
+                "report_paths": report_paths,
+                "message": f"비용 계산이 완료되었습니다. 총 예상 비용: {total_cost:,.0f}원",
+            }
+            yield f"data: {_json.dumps(final_payload, ensure_ascii=False)}\n\n"
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield f"data: {_json.dumps({'done': True, 'success': False, 'error': str(e), 'session_id': request.session_id}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @app.get("/api/v1/session/{session_id}", response_model=SessionResponse, tags=["Session"])
