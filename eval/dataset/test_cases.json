@@ -1,0 +1,317 @@
+[
+  {
+    "id": 1,
+    "item_name": "냉동 새우",
+    "description": "태국산 냉동 흰다리새우 50톤 수입",
+    "expected_hs6": "030617",
+    "expected_chapter": "03",
+    "category": "수산물",
+    "difficulty": 1
+  },
+  {
+    "id": 2,
+    "item_name": "냉동 오징어",
+    "description": "페루산 냉동 오징어(일반) 20톤 수입",
+    "expected_hs6": "030749",
+    "expected_chapter": "03",
+    "category": "수산물",
+    "difficulty": 1
+  },
+  {
+    "id": 3,
+    "item_name": "신선 연어",
+    "description": "노르웨이산 신선 대서양 연어 5톤 수입",
+    "expected_hs6": "030212",
+    "expected_chapter": "03",
+    "category": "수산물",
+    "difficulty": 1
+  },
+  {
+    "id": 4,
+    "item_name": "냉동 참치",
+    "description": "태평양산 냉동 황다랑어 30톤 수입",
+    "expected_hs6": "030342",
+    "expected_chapter": "03",
+    "category": "수산물",
+    "difficulty": 2
+  },
+  {
+    "id": 5,
+    "item_name": "굴 (생)",
+    "description": "중국산 신선 굴 (생굴) 2톤 수입",
+    "expected_hs6": "030791",
+    "expected_chapter": "03",
+    "category": "수산물",
+    "difficulty": 2
+  },
+  {
+    "id": 6,
+    "item_name": "바나나",
+    "description": "필리핀산 신선 바나나 100톤 수입",
+    "expected_hs6": "080390",
+    "expected_chapter": "08",
+    "category": "과일",
+    "difficulty": 1
+  },
+  {
+    "id": 7,
+    "item_name": "아몬드",
+    "description": "미국산 껍질 제거 아몬드 10톤 수입",
+    "expected_hs6": "080212",
+    "expected_chapter": "08",
+    "category": "견과류",
+    "difficulty": 2
+  },
+  {
+    "id": 8,
+    "item_name": "망고",
+    "description": "베트남산 신선 망고 5톤 수입",
+    "expected_hs6": "080450",
+    "expected_chapter": "08",
+    "category": "과일",
+    "difficulty": 1
+  },
+  {
+    "id": 9,
+    "item_name": "신선 마늘",
+    "description": "중국산 신선 마늘 (생마늘) 50톤 수입",
+    "expected_hs6": "070320",
+    "expected_chapter": "07",
+    "category": "채소",
+    "difficulty": 1
+  },
+  {
+    "id": 10,
+    "item_name": "커피 원두",
+    "description": "에티오피아산 볶지 않은 생두 20톤 수입",
+    "expected_hs6": "090111",
+    "expected_chapter": "09",
+    "category": "음료원료",
+    "difficulty": 1
+  },
+  {
+    "id": 11,
+    "item_name": "볶은 커피",
+    "description": "브라질산 로스팅된 커피 원두 5톤 수입",
+    "expected_hs6": "090121",
+    "expected_chapter": "09",
+    "category": "음료원료",
+    "difficulty": 2
+  },
+  {
+    "id": 12,
+    "item_name": "인스턴트 커피",
+    "description": "브라질산 인스턴트 커피 분말 3톤 수입",
+    "expected_hs6": "210111",
+    "expected_chapter": "21",
+    "category": "조제식품",
+    "difficulty": 3
+  },
+  {
+    "id": 13,
+    "item_name": "맥주",
+    "description": "독일산 맥아 맥주 100만 캔 수입",
+    "expected_hs6": "220300",
+    "expected_chapter": "22",
+    "category": "음료",
+    "difficulty": 1
+  },
+  {
+    "id": 14,
+    "item_name": "포도주",
+    "description": "프랑스산 레드 와인 2L 이하 용기 1만 병 수입",
+    "expected_hs6": "220421",
+    "expected_chapter": "22",
+    "category": "음료",
+    "difficulty": 1
+  },
+  {
+    "id": 15,
+    "item_name": "탄산음료",
+    "description": "미국산 콜라, 사이다 등 가당 탄산 음료 50톤 수입",
+    "expected_hs6": "220210",
+    "expected_chapter": "22",
+    "category": "음료",
+    "difficulty": 2
+  },
+  {
+    "id": 16,
+    "item_name": "초콜릿",
+    "description": "스위스산 카카오 함유 초콜릿 바 2톤 수입",
+    "expected_hs6": "180631",
+    "expected_chapter": "18",
+    "category": "과자",
+    "difficulty": 2
+  },
+  {
+    "id": 17,
+    "item_name": "라면",
+    "description": "일본산 즉석 조리 라면 (면 + 스프) 10만 개 수입",
+    "expected_hs6": "190230",
+    "expected_chapter": "19",
+    "category": "조제식품",
+    "difficulty": 2
+  },
+  {
+    "id": 18,
+    "item_name": "분유",
+    "description": "네덜란드산 영아용 조제분유 5톤 수입",
+    "expected_hs6": "040221",
+    "expected_chapter": "04",
+    "category": "유제품",
+    "difficulty": 2
+  },
+  {
+    "id": 19,
+    "item_name": "항생제",
+    "description": "독일산 암피실린 계열 항생제 의약품 1톤 수입",
+    "expected_hs6": "300420",
+    "expected_chapter": "30",
+    "category": "의약품",
+    "difficulty": 3
+  },
+  {
+    "id": 20,
+    "item_name": "비타민",
+    "description": "미국산 비타민C (아스코르빈산) 영양제 원료 1톤 수입",
+    "expected_hs6": "293600",
+    "expected_chapter": "29",
+    "category": "의약/화학",
+    "difficulty": 3
+  },
+  {
+    "id": 21,
+    "item_name": "면 티셔츠",
+    "description": "방글라데시산 면 100% 반팔 티셔츠 10만 장 수입",
+    "expected_hs6": "610910",
+    "expected_chapter": "61",
+    "category": "의류",
+    "difficulty": 1
+  },
+  {
+    "id": 22,
+    "item_name": "청바지",
+    "description": "인도네시아산 면 데님 청바지 (남성용) 5만 벌 수입",
+    "expected_hs6": "620342",
+    "expected_chapter": "62",
+    "category": "의류",
+    "difficulty": 2
+  },
+  {
+    "id": 23,
+    "item_name": "다운재킷",
+    "description": "중국산 거위털(다운) 충전 남성용 방한 재킷 3만 벌 수입",
+    "expected_hs6": "620191",
+    "expected_chapter": "62",
+    "category": "의류",
+    "difficulty": 3
+  },
+  {
+    "id": 24,
+    "item_name": "운동화",
+    "description": "중국산 직물 갑피(섬유 소재) 운동화 5만 켤레 수입",
+    "expected_hs6": "640411",
+    "expected_chapter": "64",
+    "category": "신발",
+    "difficulty": 2
+  },
+  {
+    "id": 25,
+    "item_name": "가죽 구두",
+    "description": "이탈리아산 천연 가죽 갑피 남성용 드레스 슈즈 1만 켤레 수입",
+    "expected_hs6": "640359",
+    "expected_chapter": "64",
+    "category": "신발",
+    "difficulty": 2
+  },
+  {
+    "id": 26,
+    "item_name": "스마트폰",
+    "description": "중국산 안드로이드 스마트폰 100만 대 수입",
+    "expected_hs6": "851712",
+    "expected_chapter": "85",
+    "category": "전자기기",
+    "difficulty": 1
+  },
+  {
+    "id": 27,
+    "item_name": "노트북 컴퓨터",
+    "description": "대만산 휴대용 개인용 노트북 컴퓨터 50만 대 수입",
+    "expected_hs6": "847130",
+    "expected_chapter": "84",
+    "category": "전자기기",
+    "difficulty": 1
+  },
+  {
+    "id": 28,
+    "item_name": "평면 TV",
+    "description": "한국산 대형 LCD/OLED 평면 텔레비전 수상기 10만 대 수입",
+    "expected_hs6": "852872",
+    "expected_chapter": "85",
+    "category": "전자기기",
+    "difficulty": 1
+  },
+  {
+    "id": 29,
+    "item_name": "무선 이어폰",
+    "description": "중국산 블루투스 무선 이어폰 (에어팟 유사) 100만 개 수입",
+    "expected_hs6": "851830",
+    "expected_chapter": "85",
+    "category": "전자기기",
+    "difficulty": 2
+  },
+  {
+    "id": 30,
+    "item_name": "리튬이온 배터리",
+    "description": "중국산 리튬이온 이차전지 (전기차용 셀) 100톤 수입",
+    "expected_hs6": "850760",
+    "expected_chapter": "85",
+    "category": "전자부품",
+    "difficulty": 2
+  },
+  {
+    "id": 31,
+    "item_name": "에어컨",
+    "description": "일본산 분리형 가정용 에어컨 (냉방 전용) 10만 대 수입",
+    "expected_hs6": "841510",
+    "expected_chapter": "84",
+    "category": "가전",
+    "difficulty": 1
+  },
+  {
+    "id": 32,
+    "item_name": "냉장고",
+    "description": "독일산 가정용 대형 냉장고 (압축식) 5만 대 수입",
+    "expected_hs6": "841810",
+    "expected_chapter": "84",
+    "category": "가전",
+    "difficulty": 1
+  },
+  {
+    "id": 33,
+    "item_name": "승용차",
+    "description": "독일산 가솔린 엔진 1500cc~3000cc 승용자동차 1000대 수입",
+    "expected_hs6": "870323",
+    "expected_chapter": "87",
+    "category": "자동차",
+    "difficulty": 2
+  },
+  {
+    "id": 34,
+    "item_name": "자전거",
+    "description": "대만산 알루미늄 프레임 일반 자전거 10만 대 수입",
+    "expected_hs6": "871200",
+    "expected_chapter": "87",
+    "category": "운송기기",
+    "difficulty": 1
+  },
+  {
+    "id": 35,
+    "item_name": "비디오 게임기",
+    "description": "일본산 가정용 비디오 게임 콘솔 10만 대 수입",
+    "expected_hs6": "950450",
+    "expected_chapter": "95",
+    "category": "완구/게임",
+    "difficulty": 2
+  }
+]
