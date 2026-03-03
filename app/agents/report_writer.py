@@ -235,77 +235,40 @@ class ReportWriterAgent:
         # 길이 제한 (30자)
         return sanitized[:30] if len(sanitized) > 30 else sanitized
     
-    async def _export_pdf_async(self, content: str, base_filename: str = "report") -> Dict[str, Any]:
-        """PDF 내보내기 (비동기 래핑)"""
+    async def _export_async(
+        self,
+        tool_key: str,
+        format_name: str,
+        ext: str,
+        kwargs: Dict[str, Any],
+        base_filename: str,
+    ) -> Dict[str, Any]:
+        """파일 내보내기 공통 로직 (비동기 래핑)."""
+        filename = f"{base_filename}.{ext}"
         try:
             loop = asyncio.get_event_loop()
-            filename = f"{base_filename}.pdf"
             result = await loop.run_in_executor(
                 None,
-                lambda: self.tools["pdf_report_exporter"].invoke({
-                    "report_content": content,
-                    "filename": filename
-                })
+                lambda: self.tools[tool_key].invoke({**kwargs, "filename": filename}),
             )
-            return {
-                "format": "pdf",
-                "path": filename,
-                "success": True,
-                "message": result
-            }
+            return {"format": format_name, "path": filename, "success": True, "message": result}
         except Exception as e:
-            return {
-                "format": "pdf",
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def _export_word_async(self, content: str, base_filename: str = "report") -> Dict[str, Any]:
-        """Word 내보내기 (비동기 래핑)"""
-        try:
-            loop = asyncio.get_event_loop()
-            filename = f"{base_filename}.docx"
-            result = await loop.run_in_executor(
-                None,
-                lambda: self.tools["word_report_exporter"].invoke({
-                    "report_content": content,
-                    "filename": filename
-                })
-            )
-            return {
-                "format": "word",
-                "path": filename,
-                "success": True,
-                "message": result
-            }
-        except Exception as e:
-            return {
-                "format": "word",
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def _export_excel_async(self, data: Dict[str, Any], base_filename: str = "report") -> Dict[str, Any]:
-        """Excel 내보내기 (비동기 래핑)"""
-        try:
-            loop = asyncio.get_event_loop()
-            filename = f"{base_filename}.xlsx"
-            result = await loop.run_in_executor(
-                None,
-                lambda: self.tools["excel_report_exporter"].invoke({
-                    "data": data,
-                    "filename": filename
-                })
-            )
-            return {
-                "format": "excel",
-                "path": filename,
-                "success": True,
-                "message": result
-            }
-        except Exception as e:
-            return {
-                "format": "excel",
-                "success": False,
-                "error": str(e)
-            }
+            return {"format": format_name, "success": False, "error": str(e)}
+
+    async def _export_pdf_async(self, content: str, base_filename: str) -> Dict[str, Any]:
+        return await self._export_async(
+            "pdf_report_exporter", "pdf", "pdf",
+            {"report_content": content}, base_filename,
+        )
+
+    async def _export_word_async(self, content: str, base_filename: str) -> Dict[str, Any]:
+        return await self._export_async(
+            "word_report_exporter", "word", "docx",
+            {"report_content": content}, base_filename,
+        )
+
+    async def _export_excel_async(self, data: Dict[str, Any], base_filename: str) -> Dict[str, Any]:
+        return await self._export_async(
+            "excel_report_exporter", "excel", "xlsx",
+            {"data": data}, base_filename,
+        )

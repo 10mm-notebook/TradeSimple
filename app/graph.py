@@ -8,19 +8,13 @@ LangGraph 기반 Supervisor 그래프 정의
 import re
 import asyncio
 from typing import Literal, Dict, Any, Optional
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, START, END
 from app.state import AgentState, get_initial_state, REQUIRED_FIELDS, FIELD_NAMES_KR
 from app.agents import HSCodeFinderAgent, TaxCalculatorAgent, ReportWriterAgent
+from app.models import get_llm
 from app.tools import exchange_rate_loader
-
-
-# LLM 초기화
-def get_llm():
-    """OpenAI LLM 인스턴스 반환"""
-    return ChatOpenAI(model="gpt-4o", temperature=0)
 
 
 # ===== 노드 함수 정의 =====
@@ -283,14 +277,10 @@ async def supervisor_node(state: AgentState) -> Dict[str, Any]:
     if state.get("missing_info"):
         return {"current_phase": "request_info"}
     
-    # HS 코드와 환율이 모두 없으면 병렬 조회
-    if not hs_code and not state.get("exchange_rate"):
-        return {"current_phase": "parallel_fetch"}
-    
-    # HS 코드만 없으면
+    # HS 코드가 없으면 병렬 조회 (HS 코드 후보 + 환율 동시 실행)
     if not hs_code:
-        return {"current_phase": "hs_code_finder"}
-    
+        return {"current_phase": "parallel_fetch"}
+
     # 비용 계산이 안 됐으면 (total_cost가 None이거나 명시적으로 0이 아닌 None)
     if total_cost is None:
         return {"current_phase": "tax_calculator"}
@@ -370,31 +360,6 @@ async def parallel_fetch_node(state: AgentState) -> Dict[str, Any]:
         }
 
 
-async def hs_code_finder_node(state: AgentState) -> Dict[str, Any]:
-    """
-    HS Code Finder 노드 (단독 실행용)
-    - 환율이 이미 있는 경우에만 사용
-    """
-    print("[Node] hs_code_finder 실행")
-    
-    item_name = state.get("item_name")
-    if not item_name:
-        return {"error": "물품명이 없습니다.", "current_phase": "request_info"}
-    
-    status_msg = AIMessage(content=f"**HS Code & Tax Finder (ReAct):** '{item_name}'의 HS 코드를 검색합니다...")
-    
-    agent = HSCodeFinderAgent()
-    result = await agent.run(item_name)
-    
-    return {
-        "messages": [status_msg],
-        "hs_code": result["hs_code"],
-        "hs_code_rationale": result["rationale"],
-        "tariff_rate": result["tariff_rate"],
-        "current_phase": "tax_calculator",
-    }
-
-
 async def tax_calculator_node(state: AgentState) -> Dict[str, Any]:
     """
     Tax Calculator 노드 (ReAct 패턴)
@@ -429,10 +394,10 @@ async def tax_calculator_node(state: AgentState) -> Dict[str, Any]:
         total_foreign_price=total_foreign_price,
         quantity_unit=quantity_unit,
         price_unit=price_unit,
+        exchange_rate=exchange_rate,  # parallel_fetch에서 조회된 값이 있으면 재사용
     )
-    
-    # 병렬 조회에서 이미 환율을 가져왔다면 그 값 유지
-    final_exchange_rate = exchange_rate or result["exchange_rate"]
+
+    final_exchange_rate = result["exchange_rate"]
     final_total_cost = result["total_cost"]
     final_tax_amount = result["tax_amount"]
     
@@ -510,27 +475,20 @@ def route_after_input_validation(state: AgentState) -> Literal["request_info", "
     return "supervisor"
 
 
-def route_supervisor(state: AgentState) -> Literal["parallel_fetch", "hs_code_finder", "tax_calculator", "report_writer", "end_node"]:
+def route_supervisor(state: AgentState) -> Literal["parallel_fetch", "tax_calculator", "report_writer", "end_node"]:
     """Supervisor 라우팅"""
     phase = state.get("current_phase", "")
-    
+
     print(f"[Route] supervisor → {phase}")
-    
+
     if phase == "parallel_fetch":
         return "parallel_fetch"
-    elif phase == "hs_code_finder":
-        return "hs_code_finder"
     elif phase == "tax_calculator":
         return "tax_calculator"
     elif phase == "report_writer":
         return "report_writer"
-    elif phase == "hs_code_selection":
-        # Human-in-the-Loop: 사용자 선택 대기 → 그래프 종료
-        return "end_node"
-    elif phase == "complete":
-        # 모든 작업 완료 → 그래프 종료
-        return "end_node"
     else:
+        # hs_code_selection / complete / 기타 → 그래프 종료
         return "end_node"
 
 
@@ -546,8 +504,7 @@ def create_graph():
     workflow.add_node("input_validator", input_validator_node)
     workflow.add_node("request_info", request_info_node)
     workflow.add_node("supervisor", supervisor_node)
-    workflow.add_node("parallel_fetch", parallel_fetch_node)  # 🔥 병렬 조회 노드
-    workflow.add_node("hs_code_finder", hs_code_finder_node)
+    workflow.add_node("parallel_fetch", parallel_fetch_node)
     workflow.add_node("tax_calculator", tax_calculator_node)
     workflow.add_node("report_writer", report_writer_node)
     
@@ -570,16 +527,14 @@ def create_graph():
         route_supervisor,
         {
             "parallel_fetch": "parallel_fetch",
-            "hs_code_finder": "hs_code_finder",
             "tax_calculator": "tax_calculator",
             "report_writer": "report_writer",
             "end_node": END,
         }
     )
-    
+
     # 각 노드에서 supervisor로 복귀
     workflow.add_edge("parallel_fetch", "supervisor")
-    workflow.add_edge("hs_code_finder", "supervisor")
     workflow.add_edge("tax_calculator", "supervisor")
     workflow.add_edge("report_writer", "supervisor")
     

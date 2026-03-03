@@ -1,73 +1,16 @@
 # app/agents/tax_calculator.py
 """
 Tax Calculator Agent
-- 진짜 ReAct 패턴: LLM이 환율 조회 및 비용 계산 수행
-- LLM을 활용한 계산 검증 및 설명 생성
+- exchange_rate_loader / final_cost_calculator 도구를 직접 호출하여 비용 계산
+- parallel_fetch에서 이미 환율을 조회한 경우 재조회 없이 재사용
 """
-import asyncio
 from typing import Dict, Any, Optional
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langgraph.prebuilt import create_react_agent
 from app.tools import exchange_rate_loader, final_cost_calculator
 
 
-# ReAct 에이전트용 시스템 프롬프트
-TAX_CALCULATOR_SYSTEM_PROMPT = """당신은 수입 비용 계산 전문가입니다. 환율을 조회하고 관세, 부가세를 포함한 총 수입 비용을 정확하게 계산해야 합니다.
-
-## 사용 가능한 도구
-1. **exchange_rate_loader**: 특정 통화와 KRW 사이의 실시간 환율을 조회합니다.
-2. **final_cost_calculator**: 단가, 수량, 환율, 관세율을 입력받아 총 비용을 계산합니다.
-
-## 계산 공식
-1. 총 물품가격(원화) = 단가 × 수량 × 환율
-2. 관세 = 총 물품가격(원화) × 관세율
-3. 부가세 = (총 물품가격 + 관세) × 10%
-4. 총 비용 = 총 물품가격 + 관세 + 부가세
-
-## 작업 순서
-1. 먼저 exchange_rate_loader 도구로 해당 통화의 환율을 조회하세요.
-2. final_cost_calculator 도구로 총 비용을 계산하세요.
-3. 계산 결과를 검증하고 설명을 추가하세요.
-
-## 중요 사항
-- 환율은 실시간 데이터를 사용합니다.
-- 계산 결과를 반드시 검증하세요.
-- 각 단계별 금액을 명확히 보여주세요.
-
-## 최종 응답 형식
-작업이 완료되면 반드시 다음 형식으로 응답하세요:
-
-[계산 결과]
-- 적용 환율: [환율] KRW/[통화]
-- 총 물품가격(원화): [금액]원
-- 예상 관세: [금액]원
-- 예상 부가세: [금액]원
-- 총 예상 비용: [금액]원
-- 검증: [계산이 올바른지 확인 결과]
-"""
-
-
 class TaxCalculatorAgent:
-    """
-    Tax Calculator 에이전트 (진짜 ReAct 패턴)
-    
-    LangGraph의 create_react_agent를 사용하여
-    LLM이 스스로 환율 조회 및 비용 계산을 수행하고 결과를 검증합니다.
-    """
-    
-    def __init__(self, llm: Optional[ChatOpenAI] = None):
-        self.llm = llm or ChatOpenAI(model="gpt-4o", temperature=0)
-        self.tools = [exchange_rate_loader, final_cost_calculator]
-        
-        # ReAct 에이전트 생성
-        # 설치된 langgraph 버전에서는 state_modifier 인자를 지원하지 않으므로,
-        # 시스템 프롬프트는 run()에서 SystemMessage로 주입한다.
-        self.agent = create_react_agent(
-            model=self.llm,
-            tools=self.tools,
-        )
-    
+    """환율 조회 → 비용 계산을 순차적으로 수행하는 에이전트."""
+
     async def run(
         self,
         unit_price: float,
@@ -77,143 +20,68 @@ class TaxCalculatorAgent:
         total_foreign_price: Optional[float] = None,
         quantity_unit: str = "개",
         price_unit: str = "1개당",
+        exchange_rate: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
-        ReAct 패턴으로 환율 조회 및 비용 계산 실행
-        
+        환율 조회 및 비용 계산 실행.
+
         Args:
             unit_price: 물품 단가 (외화)
             quantity: 수량
             currency: 통화 코드 (USD, EUR 등)
             tariff_rate: 관세율 (%)
-            total_foreign_price: 총 외화 금액 (단위 변환 계산 후, 있으면 우선 사용)
-            quantity_unit: 수량 단위 (개, kg, g 등)
-            price_unit: 단가 기준 (1개당, 100g당 등)
-            
+            total_foreign_price: 총 외화 금액 (단위 변환 후, 있으면 우선 사용)
+            quantity_unit: 수량 단위
+            price_unit: 단가 기준
+            exchange_rate: 이미 조회된 환율 (있으면 재조회 생략)
+
         Returns:
-            {
-                "exchange_rate": float,
-                "exchange_source": str,
-                "tax_amount": float,
-                "vat_amount": float,
-                "total_cost": float,
-                "breakdown": str,
-                "agent_messages": List[str]
-            }
+            {"exchange_rate", "tax_amount", "vat_amount", "total_cost", "breakdown"}
         """
-        # 총 외화 금액 결정 (total_foreign_price 우선, 없으면 quantity * unit_price)
         actual_foreign_total = total_foreign_price if total_foreign_price else (quantity * unit_price)
-        
-        print(f"[TaxCalculatorAgent] ReAct 실행 시작: {quantity}{quantity_unit} × {unit_price} {currency} ({price_unit}), 총 외화={actual_foreign_total} {currency}, 관세율 {tariff_rate}%")
 
-        # ReAct 에이전트 실행 - SystemMessage로 시스템 프롬프트를 주입
-        input_message = HumanMessage(
-            content=(
-                f"다음 수입 물품의 총 비용을 계산해주세요:\n\n"
-                f"- 단가: {unit_price} {currency} ({price_unit})\n"
-                f"- 수량: {quantity}{quantity_unit}\n"
-                f"- 총 외화 금액: {actual_foreign_total} {currency}\n"
-                f"- 적용 관세율: {tariff_rate}%\n\n"
-                f"먼저 {currency} 환율을 조회한 후, 총 비용을 계산해주세요.\n"
-                f"**중요: 총 외화 금액 {actual_foreign_total} {currency}를 기준으로 계산하세요.**"
-            )
+        print(
+            f"[TaxCalculatorAgent] 실행: {quantity}{quantity_unit} × {unit_price} {currency}"
+            f" ({price_unit}), 총외화={actual_foreign_total} {currency}, 관세율={tariff_rate}%"
         )
 
-        result = await self.agent.ainvoke(
-            {
-                "messages": [
-                    SystemMessage(content=TAX_CALCULATOR_SYSTEM_PROMPT),
-                    input_message,
-                ]
-            }
-        )
-        
-        # 에이전트 메시지에서 결과 추출
-        messages = result.get("messages", [])
-        agent_messages = []
-        final_response = ""
-        
-        # 도구 호출 결과에서 실제 값 추출
-        exchange_rate = None
-        total_cost = None
-        tax_amount = None
-        vat_amount = None
-        
-        for msg in messages:
-            if isinstance(msg, AIMessage):
-                agent_messages.append(f"[AI] {msg.content[:200]}..." if len(msg.content) > 200 else f"[AI] {msg.content}")
-                final_response = msg.content
-                
-                # tool_calls 결과 확인
-                if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                    for tool_call in msg.tool_calls:
-                        if tool_call.get('name') == 'exchange_rate_loader':
-                            pass  # 결과는 ToolMessage에서 확인
-            
-            # ToolMessage에서 실제 값 추출
-            if hasattr(msg, 'content') and isinstance(msg.content, str):
-                if '"rate":' in msg.content:
-                    import json
-                    try:
-                        data = json.loads(msg.content)
-                        if 'rate' in data:
-                            exchange_rate = data['rate']
-                    except:
-                        pass
-                if '"total_cost":' in msg.content:
-                    import json
-                    try:
-                        data = json.loads(msg.content)
-                        if 'total_cost' in data:
-                            total_cost = data['total_cost']
-                            tax_amount = data.get('tariff_amount', 0)
-                            vat_amount = data.get('vat_amount', 0)
-                    except:
-                        pass
-        
-        # 결과가 없으면 직접 계산
+        # 환율 조회 (이미 알고 있으면 스킵)
         if exchange_rate is None:
-            exchange_result = exchange_rate_loader.invoke({"target_currency": currency})
-            exchange_rate = exchange_result["rate"]
-        
-        if total_cost is None:
-            # actual_foreign_total을 사용해서 직접 계산
-            total_krw = actual_foreign_total * exchange_rate
-            tax_amount = total_krw * (tariff_rate / 100)
-            price_with_tariff = total_krw + tax_amount
-            vat_amount = price_with_tariff * 0.10
-            total_cost = price_with_tariff + vat_amount
-            breakdown = f"""--- 최종 비용 계산 결과 ---
-1. 총 물품 가격 (외화): {actual_foreign_total:,.2f} {currency}
-   ({quantity}{quantity_unit} × {unit_price} {currency} {price_unit})
-2. 총 물품 가격 (원화): {total_krw:,.0f} 원
-   (총 외화 {actual_foreign_total:,.2f} × 환율 {exchange_rate:,.2f})
-3. 예상 관세 ({tariff_rate}%): {tax_amount:,.0f} 원
-4. 예상 부가세 (10%): {vat_amount:,.0f} 원
---------------------------------
-   총 예상 수입 비용: {total_cost:,.0f} 원
---------------------------------"""
-        else:
-            total_krw = actual_foreign_total * exchange_rate
-            breakdown = f"""--- 최종 비용 계산 결과 ---
-1. 총 물품 가격 (외화): {actual_foreign_total:,.2f} {currency}
-2. 총 물품 가격 (원화): {total_krw:,.0f} 원
-3. 예상 관세 ({tariff_rate}%): {tax_amount:,.0f} 원
-4. 예상 부가세 (10%): {vat_amount:,.0f} 원
---------------------------------
-   총 예상 수입 비용: {total_cost:,.0f} 원
---------------------------------"""
-        
-        result = {
+            rate_result = exchange_rate_loader.invoke({"target_currency": currency})
+            exchange_rate = rate_result["rate"]
+
+        # 비용 계산 (total_foreign_price를 수량/단가로 표현하기 위해 quantity=1로 전달)
+        calc_result = final_cost_calculator.invoke({
+            "item_price": actual_foreign_total,
+            "quantity": 1,
             "exchange_rate": exchange_rate,
-            "exchange_source": "exchangerate-api.com",
+            "tariff_rate": tariff_rate,
+        })
+
+        tax_amount = calc_result["tariff_amount"]
+        vat_amount = calc_result["vat_amount"]
+        total_cost = calc_result["total_cost"]
+        total_krw = actual_foreign_total * exchange_rate
+
+        breakdown = (
+            f"--- 최종 비용 계산 결과 ---\n"
+            f"1. 총 물품 가격 (외화): {actual_foreign_total:,.2f} {currency}\n"
+            f"   ({quantity}{quantity_unit} × {unit_price} {currency} {price_unit})\n"
+            f"2. 총 물품 가격 (원화): {total_krw:,.0f} 원\n"
+            f"   (총 외화 {actual_foreign_total:,.2f} × 환율 {exchange_rate:,.2f})\n"
+            f"3. 예상 관세 ({tariff_rate}%): {tax_amount:,.0f} 원\n"
+            f"4. 예상 부가세 (10%): {vat_amount:,.0f} 원\n"
+            f"--------------------------------\n"
+            f"   총 예상 수입 비용: {total_cost:,.0f} 원\n"
+            f"--------------------------------"
+        )
+
+        print(f"[TaxCalculatorAgent] 완료: 총 {total_cost:,.0f}원")
+        return {
+            "exchange_rate": exchange_rate,
             "currency": currency,
             "tax_amount": tax_amount,
             "vat_amount": vat_amount,
             "total_cost": total_cost,
             "breakdown": breakdown,
-            "agent_messages": agent_messages,
         }
-        
-        print(f"[TaxCalculatorAgent] ReAct 완료: 총 {result['total_cost']:,.0f}원")
-        return result

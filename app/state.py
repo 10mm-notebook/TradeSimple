@@ -43,8 +43,7 @@ class AgentState(TypedDict):
     price_unit: Optional[str]  # 단가 기준 (1개당, 100g당, 1kg당 등)
     total_foreign_price: Optional[float]  # 총 외화 금액 (단위 변환 계산 후)
     currency: Optional[str]
-    report_format: Optional[str]
-    
+
     # 처리 결과 (초기값 None)
     hs_code: Optional[str]
     hs_code_rationale: Optional[str]
@@ -75,8 +74,7 @@ def get_initial_state() -> dict:
         "price_unit": None,
         "total_foreign_price": None,
         "currency": None,
-        "report_format": "all",  # PDF, Word, Excel 모두 생성
-        
+
         # 처리 결과
         "hs_code": None,
         "hs_code_rationale": None,
