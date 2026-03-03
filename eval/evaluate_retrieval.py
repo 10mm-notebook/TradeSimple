@@ -45,15 +45,48 @@ def load_test_cases(path: Optional[str] = None) -> List[Dict[str, Any]]:
 def extract_hs_from_doc(doc) -> Optional[str]:
     """
     FAISS 문서에서 HS 코드를 추출.
-    CSV 기반 문서: metadata['hs_code'] 사용 (우선)
-    PDF 기반 문서: page_content 정규식으로 파싱
+
+    소스별 포맷
+    ──────────────────────────────────────────────────────────
+    CSV(HSK 관세율표):
+      - metadata['hs_code'] = '306170000'  ← 우선 사용
+      - page_content: "HS 코드(세번): 306170000\n품명: ..."
+
+    PDF(HSK 품명규격 가이드):
+      - metadata에 hs_code 없음
+      - page_content 앞부분: "(0306.17-1090) 냉동한 그 밖의 새우류..."
+    ──────────────────────────────────────────────────────────
     """
+    # 1. CSV 문서 metadata (가장 신뢰도 높음)
     if hasattr(doc, "metadata") and "hs_code" in doc.metadata:
-        return str(doc.metadata["hs_code"])
-    match = re.search(r"HS\s*코드\(세번\):\s*([\d.]+)", doc.page_content)
-    if match:
-        return match.group(1)
+        raw = str(doc.metadata["hs_code"]).strip()
+        if raw and raw.lower() not in ("none", "nan", ""):
+            return raw
+
+    content = doc.page_content
+
+    # 2. CSV page_content 포맷: "HS 코드(세번): 303430000"
+    m = re.search(r"HS\s*코드\(세번\):\s*(\d[\d.]*)", content)
+    if m:
+        return m.group(1)
+
+    # 3. PDF 품명규격 가이드 포맷: "(0306.17-1090)" 또는 "(0302.13-0000)"
+    #    세번 XXXX.XX-XXXX 가 소괄호로 감싸진 형태
+    m = re.search(r"\((\d{4}[.\-]\d{2}[.\-]\d{4})\)", content)
+    if m:
+        return m.group(1)
+
     return None
+
+
+def doc_source_type(doc) -> str:
+    """문서 소스 분류 ('csv' | 'pdf' | 'unknown')"""
+    src = (doc.metadata or {}).get("source", "")
+    if "관세율표" in src:
+        return "csv"
+    if "품명규격" in src or "가이드" in src:
+        return "pdf"
+    return "unknown"
 
 
 # ── 평가 실행 ──────────────────────────────────────────────────
@@ -123,12 +156,15 @@ def run_retrieval_eval(
         search_k = max(k, 5)
         docs = vector_store.similarity_search(query, k=search_k)
 
-        # 문서별 HS 코드 추출 (None 제거)
+        # 문서별 소스 분류 및 HS 코드 추출 (None 제거)
+        src_types   = [doc_source_type(d) for d in docs]
         ranked_codes = [c for c in (extract_hs_from_doc(d) for d in docs) if c]
 
         expected = case["expected_hs6"]
         metrics = compute_retrieval_metrics(ranked_codes, expected, ks=ks_to_eval)
 
+        n_csv = src_types.count("csv")
+        n_pdf = src_types.count("pdf")
         case_result = {
             "id":            case["id"],
             "item_name":     case["item_name"],
@@ -137,6 +173,7 @@ def run_retrieval_eval(
             "expected_hs6":  expected,
             "query_used":    query,
             "top_retrieved": [normalize_hs(c) for c in ranked_codes[:5]],
+            "src_breakdown": {"csv": n_csv, "pdf": n_pdf, "k": len(docs)},
             "metrics":       metrics,
         }
         per_case.append(case_result)
@@ -148,7 +185,8 @@ def run_retrieval_eval(
             top3 = case_result["top_retrieved"][:3]
             print(
                 f"  {icon} [{case['id']:02d}] {case['item_name']:<15} "
-                f"exp={normalize_hs(expected)}  top3={top3}"
+                f"exp={normalize_hs(expected)}  top3={top3}  "
+                f"(csv={n_csv}/pdf={n_pdf})"
             )
 
     agg = aggregate_metrics([c["metrics"] for c in per_case])
@@ -170,6 +208,22 @@ def print_summary(result: Dict[str, Any], ks: List[int] = (1, 3, 5)) -> None:
         f"필드={cfg['query_field']}  |  n={n}"
     )
     print(format_metrics_table(result["aggregate"], ks=list(ks), title=title))
+
+    # CSV vs PDF 소스 비율 분석
+    if result["per_case"] and "src_breakdown" in result["per_case"][0]:
+        total_k   = sum(c["src_breakdown"]["k"]   for c in result["per_case"])
+        total_csv = sum(c["src_breakdown"]["csv"] for c in result["per_case"])
+        total_pdf = sum(c["src_breakdown"]["pdf"] for c in result["per_case"])
+        csv_ratio = total_csv / total_k if total_k else 0
+        pdf_ratio = total_pdf / total_k if total_k else 0
+        print(f"\n  문서 소스 비율 (전체 검색 k={result['config']['k']}×{len(result['per_case'])}케이스)")
+        print(f"    CSV(관세율표): {total_csv:4d}개  ({csv_ratio:.0%})")
+        print(f"    PDF(품명규격): {total_pdf:4d}개  ({pdf_ratio:.0%})")
+
+        # PDF가 과도하면 경고
+        if pdf_ratio > 0.5:
+            print(f"\n  ⚠  PDF 문서 비율이 {pdf_ratio:.0%}으로 높습니다.")
+            print("     → run_preprocessing.py 재실행 시 CSV 비중을 늘리는 것을 권장합니다.")
 
     # 난이도별 분석
     for diff, label in [(1, "쉬움"), (2, "보통"), (3, "어려움")]:

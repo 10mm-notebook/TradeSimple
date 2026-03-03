@@ -32,15 +32,35 @@ def normalize_hs(hs_code: str, digits: int = 6) -> str:
     """
     HS 코드를 지정 자릿수로 정규화 (앞자리 0 포함).
 
-    >>> normalize_hs('303430000', 6)   # CSV 저장값 (leading zero 없음)
-    '030343'
-    >>> normalize_hs('0303.43-0000', 6)  # 표준 표기
-    '030343'
-    >>> normalize_hs('030343', 4)
-    '0303'
+    입력 형식별 처리 규칙
+    ──────────────────────────────────────────────────────
+    9-10자리 원시 코드 (CSV 세번, PDF "XXXX.XX-XXXX"):
+      zfill(10) 후 앞 n자리 추출
+      '303430000'     → '030343' (6자리)
+      '0303.43-0000'  → '030343' (6자리)
+
+    n자리 이상 짧은 포맷 코드 (test_cases expected 등):
+      앞 n자리 그대로 사용
+      '030343'  (6자리)  → '030343' (6자리) ✓
+      '030343'  (6자리)  → '0303'   (4자리) ✓
+      '030343'  (6자리)  → '03'     (2자리) ✓
+
+    n자리 미만 초단 코드 (챕터·헤딩 코드):
+      오른쪽에 0 패딩 (HS 표기 관례상)
+      '03'   (2자리) → '030000' (6자리) ✓
+      '0306' (4자리) → '030600' (6자리) ✓
+    ──────────────────────────────────────────────────────
     """
     cleaned = re.sub(r'[.\-\s]', '', str(hs_code))
-    return cleaned.zfill(10)[:digits]
+    if len(cleaned) >= 9:
+        # 원시 코드 (CSV/PDF): 10자리로 맞추고 앞 n자리 추출
+        return cleaned.zfill(10)[:digits]
+    elif len(cleaned) >= digits:
+        # 이미 n자리 이상인 포맷 코드: 앞 n자리 그대로
+        return cleaned[:digits]
+    else:
+        # n자리 미만: 오른쪽에 0을 채워 n자리로
+        return cleaned.ljust(digits, '0')
 
 
 def hs_match(code_a: str, code_b: str, digits: int = 6) -> bool:
