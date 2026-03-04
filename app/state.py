@@ -44,6 +44,12 @@ class AgentState(TypedDict):
     total_foreign_price: Optional[float]  # 총 외화 금액 (단위 변환 계산 후)
     currency: Optional[str]
 
+    # 상품 상세 정보 (HS코드 정확도 향상용 — 선택 입력, null 허용)
+    raw_material: Optional[str]       # 원재료 (예: 면 100%, 알루미늄 합금, 우유)
+    processing_method: Optional[str]  # 가공방법 (예: 냉동, 훈제, 로스팅, 발효)
+    product_form: Optional[str]       # 제품형태 (예: 분말, 원단, 완성품, 원과)
+    main_material: Optional[str]      # 주요 소재/성분 (예: 리튬이온, 카카오 35%, 다운 충전재)
+
     # 처리 결과 (초기값 None)
     hs_code: Optional[str]
     hs_code_rationale: Optional[str]
@@ -74,6 +80,12 @@ def get_initial_state() -> dict:
         "price_unit": None,
         "total_foreign_price": None,
         "currency": None,
+
+        # 상품 상세 정보 (선택)
+        "raw_material": None,
+        "processing_method": None,
+        "product_form": None,
+        "main_material": None,
 
         # 처리 결과
         "hs_code": None,

@@ -32,11 +32,17 @@ except FileNotFoundError:
     print("경고: ./data/tariff_by_hs.csv 파일을 찾을 수 없습니다.")
 
 
-# --- Retriever 및 HS/관세 도구 호출 제한 (Lazy Loading + Rate Limit) ---
-_retriever = None
+# --- 검색 스토어 (Lazy Loading) ---
+_vector_store = None       # 통합 인덱스 (PDF + CSV)
+_pdf_store    = None       # PDF-only 인덱스 (balanced search용)
 _hs_code_search_call_count = 0
-_tariff_search_call_count = 0
+_tariff_search_call_count  = 0
 _query_expander = None
+
+# balanced search 설정 (RAG 실험 최적값: PDF 쿼터=3)
+PDF_QUOTA        = 3
+COMBINED_VS_PATH = "./vector_store/faiss_index"
+PDF_ONLY_VS_PATH = "./vector_store/faiss_index_pdf"
 
 # 검색 쿼리 확장 (LLM 기반) 사용 여부
 USE_LLM_QUERY_EXPANSION = True
@@ -49,20 +55,52 @@ def reset_hs_code_search_limit() -> None:
     _tariff_search_call_count = 0
 
 
-def get_retriever():
-    """저장된 FAISS 인덱스로부터 Retriever를 생성 (Lazy Loading)"""
-    global _retriever
-    if _retriever is not None:
-        return _retriever
+def _load_stores() -> None:
+    """통합 인덱스 + PDF-only 인덱스 Lazy Loading."""
+    global _vector_store, _pdf_store
+    if _vector_store is not None:
+        return
 
-    vs_path = "./vector_store/faiss_index"
-    if not os.path.exists(vs_path):
-        raise FileNotFoundError("Vector store not found. Please run 'run_preprocessing.py' first.")
+    if not os.path.exists(COMBINED_VS_PATH):
+        raise FileNotFoundError(
+            f"Vector store not found: {COMBINED_VS_PATH}\n"
+            "Please run 'python run_preprocessing.py' first."
+        )
 
     embedding_model = get_embedding_model()
-    vector_store = FAISS.load_local(vs_path, embedding_model, allow_dangerous_deserialization=True)
-    _retriever = vector_store.as_retriever(search_kwargs={"k": 5})
-    return _retriever
+    _vector_store = FAISS.load_local(
+        COMBINED_VS_PATH, embedding_model, allow_dangerous_deserialization=True
+    )
+
+    if os.path.exists(PDF_ONLY_VS_PATH):
+        _pdf_store = FAISS.load_local(
+            PDF_ONLY_VS_PATH, embedding_model, allow_dangerous_deserialization=True
+        )
+        print(f"[Tools] 듀얼 인덱스 로드 완료 (PDF 쿼터={PDF_QUOTA})")
+    else:
+        print("[Tools] PDF-only 인덱스 없음 — 단일 인덱스 검색으로 동작합니다.")
+
+
+def _balanced_search(query: str, k: int = 5) -> List:
+    """
+    통합 인덱스에서 (k - PDF_QUOTA)개 + PDF-only 인덱스에서 PDF_QUOTA개 검색.
+    PDF-only 인덱스가 없으면 통합 인덱스 단독 검색으로 fallback.
+    """
+    _load_stores()
+    if _pdf_store is None:
+        return _vector_store.similarity_search(query, k=k)
+
+    csv_k = max(0, k - PDF_QUOTA)
+    pdf_k = min(k, PDF_QUOTA)
+    csv_docs = _vector_store.similarity_search(query, k=csv_k) if csv_k > 0 else []
+    pdf_docs = _pdf_store.similarity_search(query, k=pdf_k)
+    return csv_docs + pdf_docs
+
+
+def get_retriever():
+    """저장된 FAISS 인덱스로부터 Retriever를 반환 (내부 호환용)."""
+    _load_stores()
+    return _vector_store.as_retriever(search_kwargs={"k": 5})
 
 
 def get_query_expander():
@@ -134,8 +172,7 @@ def get_rag_snippet_for_candidate(item_name: str, hs_code: str, llm_snippet: Opt
     - 아니면 검색 결과에서 가장 관련 문장을 자동 선택
     """
     try:
-        retriever = get_retriever()
-        docs = retriever.invoke(f"{item_name} {hs_code}")
+        docs = _balanced_search(f"{item_name} {hs_code}", k=5)
         texts = [d.page_content for d in docs if getattr(d, "page_content", None)]
 
         # LLM 인용이 실제 문서에 포함되면 그대로 사용
@@ -206,8 +243,7 @@ def hs_code_search(query: str) -> str:
     print(f"[Tool] hs_code_search 실제 검색어: {processed_query_short}")
 
     try:
-        retriever = get_retriever()
-        retrieved_docs = retriever.invoke(final_query)
+        retrieved_docs = _balanced_search(final_query, k=5)
         if not retrieved_docs:
             return f"'{processed_query}'에 대한 HS 코드 정보를 찾을 수 없습니다."
         return "\n\n".join([doc.page_content for doc in retrieved_docs])

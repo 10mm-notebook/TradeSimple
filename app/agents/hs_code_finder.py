@@ -23,7 +23,8 @@ HS_CODE_FINDER_CANDIDATES_PROMPT = """당신은 HS 코드 분류 전문가입니
 - hs_code_search 도구만 사용하여 HS 코드 후보를 찾으세요.
 
 ## 검색 키워드 규칙
-- 핵심 단어 2개 정도로 검색하세요 (예: "냉동 참치", "스마트워치")
+- 물품명을 기본으로 하되, 원재료·가공방법·제품형태·주요 소재가 제공된 경우 이를 조합해 검색하세요.
+- 핵심 단어 2~3개로 검색하세요 (예: "냉동 참치", "면 티셔츠 편성물", "리튬이온 배터리")
 - 여러 키워드로 검색해서 다양한 후보를 찾으세요.
 
 ## 작업 순서
@@ -57,11 +58,12 @@ HS_CODE_FINDER_SYSTEM_PROMPT = """당신은 HS 코드 분류 전문가입니다.
 2. **tariff_search_by_hs_code**: HS 코드로 관세율을 조회합니다.
 
 ## 검색 키워드 규칙 (중요)
-- 사용자가 긴 문장으로 설명하더라도, 실제 도구에 전달하는 검색어는 항상 **아주 짧은 키워드 2개 정도**여야 합니다.
+- 사용자가 긴 문장으로 설명하더라도, 실제 도구에 전달하는 검색어는 **핵심 단어 2~3개**여야 합니다.
 - 우선순위:
-  1) 한국어 상품명 기준으로 핵심 단어 2개 (예: "미국산 냉동 참치 수입" → "냉동 참치")
-  2) 필요 시 간단한 영문 2단어 키워드를 보조적으로 추가 (예: "냉동 참치" + "frozen tuna")
-- 문장 전체를 그대로 검색어로 쓰지 말고, 기능/용도/재질/형태를 가장 잘 나타내는 2개 정도의 단어만 골라서 사용하세요.
+  1) 물품명 + 가공방법/소재 조합 (예: "냉동 참치", "면 편성물 티셔츠", "리튬이온 전지")
+  2) 원재료나 제품형태가 HS 코드 구분에 중요하면 반드시 포함 (예: "다운 충전 재킷", "천연 가죽 신발")
+  3) 필요 시 영문 키워드 보조 추가 (예: "frozen tuna", "lithium ion battery")
+- 문장 전체를 그대로 쓰지 말고, 분류에 핵심적인 단어만 조합하세요.
 
 ## 작업 순서
 1. 먼저 hs_code_search 도구로 물품의 HS 코드를 검색하세요.
@@ -117,13 +119,43 @@ class HSCodeFinderAgent:
             tools=self.tools,
         )
     
-    async def run(self, item_name: str) -> Dict[str, Any]:
+    def _build_detail_context(
+        self,
+        raw_material: Optional[str],
+        processing_method: Optional[str],
+        product_form: Optional[str],
+        main_material: Optional[str],
+    ) -> str:
+        """상세 정보가 있으면 검색 컨텍스트 문자열 생성."""
+        parts = []
+        if raw_material:
+            parts.append(f"원재료: {raw_material}")
+        if processing_method:
+            parts.append(f"가공방법: {processing_method}")
+        if product_form:
+            parts.append(f"제품형태: {product_form}")
+        if main_material:
+            parts.append(f"주요 소재/성분: {main_material}")
+        return "\n".join(parts)
+
+    async def run(
+        self,
+        item_name: str,
+        raw_material: Optional[str] = None,
+        processing_method: Optional[str] = None,
+        product_form: Optional[str] = None,
+        main_material: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         ReAct 패턴으로 HS 코드 검색 및 관세율 조회 실행
-        
+
         Args:
             item_name: 검색할 물품명
-            
+            raw_material: 원재료 (선택)
+            processing_method: 가공방법 (선택)
+            product_form: 제품형태 (선택)
+            main_material: 주요 소재/성분 (선택)
+
         Returns:
             {
                 "hs_code": str,
@@ -136,12 +168,15 @@ class HSCodeFinderAgent:
 
         # 도구 호출 카운터 리셋 (에이전트 1회 실행당 3회 제한 적용)
         reset_hs_code_search_limit()
-        
+
+        detail_ctx = self._build_detail_context(raw_material, processing_method, product_form, main_material)
+        query_text = f"다음 물품의 HS 코드를 찾고 관세율을 조회해주세요: {item_name}"
+        if detail_ctx:
+            query_text += f"\n\n[상세 정보]\n{detail_ctx}"
+
         # ReAct 에이전트 실행
         # 시스템 프롬프트를 SystemMessage로 명시적으로 추가
-        input_message = HumanMessage(
-            content=f"다음 물품의 HS 코드를 찾고 관세율을 조회해주세요: {item_name}"
-        )
+        input_message = HumanMessage(content=query_text)
         result = await self.agent.ainvoke(
             {
                 "messages": [
@@ -176,13 +211,24 @@ class HSCodeFinderAgent:
         print(f"[HSCodeFinderAgent] ReAct 완료: HS Code={result['hs_code']}, Tariff={result['tariff_rate']}%")
         return result
     
-    async def run_with_candidates(self, item_name: str) -> Dict[str, Any]:
+    async def run_with_candidates(
+        self,
+        item_name: str,
+        raw_material: Optional[str] = None,
+        processing_method: Optional[str] = None,
+        product_form: Optional[str] = None,
+        main_material: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         HS 코드 후보 3개를 반환 (Human-in-the-Loop용)
-        
+
         Args:
             item_name: 검색할 물품명
-            
+            raw_material: 원재료 (선택)
+            processing_method: 가공방법 (선택)
+            product_form: 제품형태 (선택)
+            main_material: 주요 소재/성분 (선택)
+
         Returns:
             {
                 "candidates": [
@@ -195,10 +241,13 @@ class HSCodeFinderAgent:
         print(f"[HSCodeFinderAgent] 후보 검색 시작: {item_name}")
 
         reset_hs_code_search_limit()
-        
-        input_message = HumanMessage(
-            content=f"다음 물품의 HS 코드 후보 3개를 찾아주세요: {item_name}"
-        )
+
+        detail_ctx = self._build_detail_context(raw_material, processing_method, product_form, main_material)
+        query_text = f"다음 물품의 HS 코드 후보 3개를 찾아주세요: {item_name}"
+        if detail_ctx:
+            query_text += f"\n\n[상세 정보]\n{detail_ctx}"
+
+        input_message = HumanMessage(content=query_text)
         result = await self.agent.ainvoke(
             {
                 "messages": [
@@ -222,7 +271,13 @@ class HSCodeFinderAgent:
         
         # 후보가 3개 미만이면 기본 결과로 보충
         if len(candidates) < 3:
-            default_result = await self.run(item_name)
+            default_result = await self.run(
+                item_name,
+                raw_material=raw_material,
+                processing_method=processing_method,
+                product_form=product_form,
+                main_material=main_material,
+            )
             if default_result["hs_code"] != "미확인":
                 found_codes = [c["hs_code"] for c in candidates]
                 if default_result["hs_code"] not in found_codes:

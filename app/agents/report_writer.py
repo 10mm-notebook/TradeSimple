@@ -1,8 +1,7 @@
 # app/agents/report_writer.py
 """
 Report Writer Agent
-- 진짜 ReAct 패턴: LLM이 보고서 내용 구성 및 형식 결정
-- asyncio.gather로 PDF/Word/Excel 병렬 생성
+- LLM으로 보고서 내용 생성 후 asyncio.gather로 PDF/Word/Excel 병렬 생성
 """
 import asyncio
 from typing import Dict, Any, Optional, List
@@ -34,9 +33,9 @@ REPORT_WRITER_SYSTEM_PROMPT = """당신은 수입 비용 분석 보고서 작성
 
 class ReportWriterAgent:
     """
-    Report Writer 에이전트 (ReAct 패턴 + 병렬 처리)
-    
-    LLM을 활용하여 보고서 내용을 구성하고,
+    Report Writer 에이전트
+
+    LLM으로 보고서 내용을 구성하고,
     asyncio.gather로 PDF/Word/Excel을 병렬 생성합니다.
     """
     
@@ -67,6 +66,10 @@ class ReportWriterAgent:
         quantity_unit: str = "개",
         price_unit: str = "1개당",
         total_foreign_price: Optional[float] = None,
+        raw_material: Optional[str] = None,
+        processing_method: Optional[str] = None,
+        product_form: Optional[str] = None,
+        main_material: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         LLM으로 보고서 내용 생성 후 병렬로 파일 생성
@@ -111,6 +114,11 @@ class ReportWriterAgent:
             "tax_amount": tax_amount,
             "vat_amount": vat_amount,
             "total_cost": total_cost,
+            # 상세 정보 (없으면 빈 문자열)
+            "raw_material": raw_material or "",
+            "processing_method": processing_method or "",
+            "product_form": product_form or "",
+            "main_material": main_material or "",
         }
         
         # LLM으로 보고서 내용 생성
@@ -200,6 +208,12 @@ class ReportWriterAgent:
 - 단가: {unit_price:,.2f} {currency} ({price_unit})
 - 총 물품가격(외화): {total_foreign:,.2f} {currency}
 
+## 상품 상세 정보
+- 원재료: {raw_material}
+- 가공방법: {processing_method}
+- 제품형태: {product_form}
+- 주요 소재/성분: {main_material}
+
 ## HS 코드 분류
 - HS 코드: {hs_code}
 - 분류 근거: {hs_code_rationale}
@@ -215,7 +229,7 @@ class ReportWriterAgent:
 - 예상 부가세: {vat_amount:,.0f}원
 - 총 예상 비용: {total_cost:,.0f}원
 
-마크다운 형식으로 보기 좋게 작성해주세요.""")
+상품 상세 정보 중 빈 값은 보고서에서 생략하세요. 마크다운 형식으로 보기 좋게 작성해주세요.""")
         ])
         
         messages = prompt.format_messages(**data)

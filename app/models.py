@@ -15,11 +15,13 @@ load_dotenv()
 def get_embedding_model():
     """
     한국어 임베딩 모델 로더
-    - jhgan/ko-sroberta-multitask 모델 사용
-    - CPU에서 실행 (GPU 없이도 동작)
+    - nlpai-lab/KURE-v1 모델 사용 (RAG 실험 최적 모델)
+    - CUDA 사용 가능 시 GPU, 아니면 CPU
     """
-    model_name = "jhgan/ko-sroberta-multitask"
-    model_kwargs = {'device': 'cpu'}
+    import torch
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model_name = "nlpai-lab/KURE-v1"
+    model_kwargs = {'device': device}
     encode_kwargs = {'normalize_embeddings': True}
     return HuggingFaceEmbeddings(
         model_name=model_name,

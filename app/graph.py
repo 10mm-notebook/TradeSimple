@@ -66,6 +66,10 @@ async def input_validator_node(state: AgentState) -> Dict[str, Any]:
 5. price_unit: 단가 기준 (1개당, 100g당, 1kg당, 박스당 등)
 6. total_foreign_price: **총 외화 금액을 직접 계산** (중요!)
 7. currency: 통화코드 (3자리 ISO 코드)
+8. raw_material: 원재료 또는 주원료 (예: 면 100%, 알루미늄 합금, 우유, 카카오) — 없으면 NONE
+9. processing_method: 가공방법 (예: 냉동, 훈제, 로스팅, 발효, 압착, 분무건조) — 없으면 NONE
+10. product_form: 제품형태 (예: 분말, 원단, 완성품, 원과, 알맹이, 캡슐) — 없으면 NONE
+11. main_material: 주요 소재/성분 (예: 리튬이온, 카카오 35% 이상, 다운 충전재, 천연 가죽) — 없으면 NONE
 
 **단위 계산 예시 (중요!):**
 - "100그램당 5위안, 300kg 수입" → 300kg = 300,000g, 총 가격 = (300,000 / 100) × 5 = 15,000
@@ -90,7 +94,11 @@ QUANTITY_UNIT: [수량 단위: 개/kg/g/lb/톤/박스 등]
 UNIT_PRICE: [단가 숫자]
 PRICE_UNIT: [단가 기준: 1개당/100g당/1kg당 등]
 TOTAL_FOREIGN_PRICE: [총 외화 금액 계산 결과]
-CURRENCY: [통화코드]"""),
+CURRENCY: [통화코드]
+RAW_MATERIAL: [원재료 또는 NONE]
+PROCESSING_METHOD: [가공방법 또는 NONE]
+PRODUCT_FORM: [제품형태 또는 NONE]
+MAIN_MATERIAL: [주요 소재/성분 또는 NONE]"""),
         ("human", "{user_message}")
     ])
     
@@ -188,6 +196,19 @@ CURRENCY: [통화코드]"""),
         elif "페소" in msg_lower:
             extracted["currency"] = "PHP"
     
+    # 상세 정보 추출 (선택 필드 — NONE이면 None으로)
+    for field_key, label in [
+        ("raw_material", "RAW_MATERIAL"),
+        ("processing_method", "PROCESSING_METHOD"),
+        ("product_form", "PRODUCT_FORM"),
+        ("main_material", "MAIN_MATERIAL"),
+    ]:
+        m = re.search(rf'{label}:\s*(.+?)(?:\n|$)', extraction_text)
+        if m:
+            val = m.group(1).strip()
+            if val.upper() != "NONE" and val:
+                extracted[field_key] = val
+
     # 기존 상태와 병합
     item_name = extracted.get("item_name") or state.get("item_name")
     quantity = extracted.get("quantity") or state.get("quantity")
@@ -221,10 +242,15 @@ CURRENCY: [통화코드]"""),
         "price_unit": price_unit,
         "total_foreign_price": total_foreign_price,
         "currency": currency,
+        # 상세 정보 (기존 state 값 우선, 새 추출값으로 보완)
+        "raw_material": extracted.get("raw_material") or state.get("raw_material"),
+        "processing_method": extracted.get("processing_method") or state.get("processing_method"),
+        "product_form": extracted.get("product_form") or state.get("product_form"),
+        "main_material": extracted.get("main_material") or state.get("main_material"),
         "missing_info": missing if missing else None,
         "current_phase": "request_info" if missing else "parallel_fetch",
     }
-    
+
     print(f"[Node] input_validator 완료: 추출됨={extracted}, 총외화={total_foreign_price}, 누락={missing}")
     return update
 
@@ -314,7 +340,13 @@ async def parallel_fetch_node(state: AgentState) -> Dict[str, Any]:
     async def fetch_hs_code_candidates():
         """HS 코드 후보 3개 검색 (Human-in-the-Loop)"""
         agent = HSCodeFinderAgent()
-        return await agent.run_with_candidates(item_name)
+        return await agent.run_with_candidates(
+            item_name,
+            raw_material=state.get("raw_material"),
+            processing_method=state.get("processing_method"),
+            product_form=state.get("product_form"),
+            main_material=state.get("main_material"),
+        )
     
     async def fetch_exchange_rate():
         """환율 조회"""
@@ -349,7 +381,13 @@ async def parallel_fetch_node(state: AgentState) -> Dict[str, Any]:
     else:
         # 후보 없으면 기본 검색 결과 사용
         agent = HSCodeFinderAgent()
-        default_result = await agent.run(item_name)
+        default_result = await agent.run(
+            item_name,
+            raw_material=state.get("raw_material"),
+            processing_method=state.get("processing_method"),
+            product_form=state.get("product_form"),
+            main_material=state.get("main_material"),
+        )
         return {
             "messages": [status_msg],
             "hs_code": default_result["hs_code"],
@@ -362,8 +400,8 @@ async def parallel_fetch_node(state: AgentState) -> Dict[str, Any]:
 
 async def tax_calculator_node(state: AgentState) -> Dict[str, Any]:
     """
-    Tax Calculator 노드 (ReAct 패턴)
-    - 환율이 이미 조회된 상태에서 비용 계산
+    Tax Calculator 노드
+    - 환율이 이미 조회된 상태에서 비용 계산 (재조회 없음)
     - 무게/개수 등 다양한 단위 지원
     """
     print("[Node] tax_calculator 실행")
@@ -451,6 +489,10 @@ async def report_writer_node(state: AgentState) -> Dict[str, Any]:
         quantity_unit=state.get("quantity_unit", "개"),
         price_unit=state.get("price_unit", "1개당"),
         total_foreign_price=total_foreign_price,
+        raw_material=state.get("raw_material"),
+        processing_method=state.get("processing_method"),
+        product_form=state.get("product_form"),
+        main_material=state.get("main_material"),
     )
     
     final_msg = AIMessage(
@@ -566,8 +608,6 @@ def _status_message(node_name: str, state: Dict[str, Any]) -> str:
         return "⏳ 추가 정보가 필요합니다. 안내 메시지를 작성 중입니다."
     if node_name == "parallel_fetch":
         return f"🔍 **'{item_name}'**의 HS 코드를 검색하고, **{currency}** 환율을 조회하고 있습니다..."
-    if node_name == "hs_code_finder":
-        return f"🔍 **'{item_name}'**의 HS 코드를 검색하고 있습니다..."
     if node_name == "tax_calculator":
         er = state.get("exchange_rate")
         if er is not None:
