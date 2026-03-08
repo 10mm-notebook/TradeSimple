@@ -210,8 +210,40 @@ EXPERIMENTS: List[ExperimentConfig] = [
     ExperimentConfig(
         name="embed_pixie_spell",
         k=5, use_expansion=False, query_field="item_name",
-        description="baseline 청킹, PIXIE-Spell-1.7B-fp16 (GPU)",
+        description="baseline 청킹, PIXIE-Spell-1.7B-fp16 (GPU ~3.4GB)",
         vs_name="baseline_pixie_spell", embedding_name="pixie_spell",
+    ),
+    ExperimentConfig(
+        name="embed_pixie_rune",
+        k=5, use_expansion=False, query_field="item_name",
+        description="baseline 청킹, PIXIE-Rune-Preview (GPU ~2-4GB)",
+        vs_name="baseline_pixie_rune", embedding_name="pixie_rune",
+    ),
+    ExperimentConfig(
+        name="embed_qwen3_4b_int8",
+        k=5, use_expansion=False, query_field="item_name",
+        description="baseline 청킹, Qwen3-Embedding-4B INT8 (GPU ~4GB, bitsandbytes 필요)",
+        vs_name="baseline_qwen3_4b_int8", embedding_name="qwen3_4b_int8",
+    ),
+
+    # ── GPU 모델 × large 청킹 조합 ─────────────────────────────
+    ExperimentConfig(
+        name="large_pixie_spell",
+        k=5, use_expansion=False, query_field="item_name",
+        description="large 청킹(2000자) + PIXIE-Spell-1.7B-fp16 (GPU)",
+        vs_name="large_pixie_spell", embedding_name="pixie_spell",
+    ),
+    ExperimentConfig(
+        name="large_pixie_rune",
+        k=5, use_expansion=False, query_field="item_name",
+        description="large 청킹(2000자) + PIXIE-Rune-Preview (GPU)",
+        vs_name="large_pixie_rune", embedding_name="pixie_rune",
+    ),
+    ExperimentConfig(
+        name="large_qwen3_4b_int8",
+        k=5, use_expansion=False, query_field="item_name",
+        description="large 청킹(2000자) + Qwen3-Embedding-4B INT8 (GPU, bitsandbytes 필요)",
+        vs_name="large_qwen3_4b_int8", embedding_name="qwen3_4b_int8",
     ),
 
     # ── 조합 실험 (청킹 + 임베딩 교차) ──────────────────────────
@@ -277,6 +309,43 @@ EXPERIMENTS: List[ExperimentConfig] = [
         description="balanced PDF=5 + CSV=0 (PDF-only 검색)",
         vs_name="large_kure_v1", embedding_name="kure_v1",
         pdf_quota=5, pdf_vs_name="large_kure_v1",
+    ),
+
+    # ── balanced 듀얼 인덱스 × pixie_spell (large 청킹) ──────────
+    ExperimentConfig(
+        name="balanced_1pdf_large_pixie",
+        k=5, use_expansion=False, query_field="item_name",
+        description="balanced PDF=1 + CSV=4 (large+pixie_spell 인덱스)",
+        vs_name="large_pixie_spell", embedding_name="pixie_spell",
+        pdf_quota=1, pdf_vs_name="large_pixie_spell",
+    ),
+    ExperimentConfig(
+        name="balanced_2pdf_large_pixie",
+        k=5, use_expansion=False, query_field="item_name",
+        description="balanced PDF=2 + CSV=3 (large+pixie_spell 인덱스)",
+        vs_name="large_pixie_spell", embedding_name="pixie_spell",
+        pdf_quota=2, pdf_vs_name="large_pixie_spell",
+    ),
+    ExperimentConfig(
+        name="balanced_3pdf_large_pixie",
+        k=5, use_expansion=False, query_field="item_name",
+        description="balanced PDF=3 + CSV=2 (large+pixie_spell 인덱스)",
+        vs_name="large_pixie_spell", embedding_name="pixie_spell",
+        pdf_quota=3, pdf_vs_name="large_pixie_spell",
+    ),
+    ExperimentConfig(
+        name="balanced_4pdf_large_pixie",
+        k=5, use_expansion=False, query_field="item_name",
+        description="balanced PDF=4 + CSV=1 (large+pixie_spell 인덱스)",
+        vs_name="large_pixie_spell", embedding_name="pixie_spell",
+        pdf_quota=4, pdf_vs_name="large_pixie_spell",
+    ),
+    ExperimentConfig(
+        name="balanced_5pdf_large_pixie",
+        k=5, use_expansion=False, query_field="item_name",
+        description="balanced PDF=5 + CSV=0 (large+pixie_spell PDF-only 검색)",
+        vs_name="large_pixie_spell", embedding_name="pixie_spell",
+        pdf_quota=5, pdf_vs_name="large_pixie_spell",
     ),
 
     # ── 검색 방법 (baseline_baseline 인덱스 사용 — docs.json 포함) ──

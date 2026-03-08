@@ -184,26 +184,44 @@ CSV 문서는 행(row) 단위 Document로 고정 (청킹 불필요).
 
 #### GPU 필요 (registry 등록, 선택 실행)
 
-| 키 | 모델 | VRAM |
-|----|------|------|
-| `pixie_spell` | `telepix/PIXIE-Spell-Preview-1.7B-fp16` | ~3GB |
-| `pixie_rune` | `telepix/PIXIE-Rune-Preview` | ~4GB |
-| `qwen3_4b` | `Qwen/Qwen3-Embedding-4B-bf16` | ~8GB+ |
-| `qwen3_8b` | `Qwen/Qwen3-Embedding-8B-bf16` | ~16GB+ |
-| `gte_qwen2_7b` | `Alibaba-NLP/gte-Qwen2-7B-instruct-fp16` | ~14GB+ |
+| 키 | 모델 | VRAM | 로딩 방식 |
+|----|------|------|----------|
+| `pixie_spell` | `telepix/PIXIE-Spell-Preview-1.7B` | ~3.4GB (fp16 강제) | SentenceTransformer |
+| `pixie_rune` | `telepix/PIXIE-Rune-Preview` | ~4GB | SentenceTransformer |
+| `qwen3_4b_int8` | `Qwen/Qwen3-Embedding-4B` | ~4GB (INT8) | AutoModel + last-token pooling |
+| `qwen3_4b` | `Qwen/Qwen3-Embedding-4B-bf16` | ~8GB+ | AutoModel + last-token pooling |
+| `qwen3_8b` | `Qwen/Qwen3-Embedding-8B-bf16` | ~16GB+ | AutoModel + last-token pooling |
+| `gte_qwen2_7b` | `Alibaba-NLP/gte-Qwen2-7B-instruct-fp16` | ~14GB+ | - |
+
+> **참고**: Qwen3-Embedding은 LLM 기반 last-token pooling 아키텍처로 SentenceTransformer 미지원.
+> `_AutoModelEmbeddings` 래퍼로 `transformers.AutoModel` 직접 로드 + L2 정규화.
 
 ### 임베딩 모델 실험 결과 (청킹=baseline 고정)
 
-| 실험 | Hit@1 HS6 | Hit@5 HS6 | MRR HS6 | Hit@5 HS4 | MRR HS4 |
-|------|-----------|-----------|---------|-----------|---------|
-| `baseline` (ko-sroberta) | 22.9% | 37.1% | 0.2843 | 54.3% | 0.4329 |
-| `embed_kure_v1` | **25.7%** | 45.7% | **0.3248** | **74.3%** | **0.5676** |
-| `embed_snowflake_ko` | 14.3% | **51.4%** | 0.2743 | 68.6% | 0.4652 |
+| 실험 | 환경 | Hit@1 HS6 | Hit@5 HS6 | MRR HS6 | Hit@5 HS4 | MRR HS4 |
+|------|------|-----------|-----------|---------|-----------|---------|
+| `baseline` (ko-sroberta) | CPU | 22.9% | 37.1% | 0.2843 | 54.3% | 0.4329 |
+| `embed_kure_v1` | CPU | **25.7%** | 45.7% | 0.3248 | 74.3% | 0.5676 |
+| `embed_snowflake_ko` | CPU | 14.3% | 51.4% | 0.2743 | 68.6% | 0.4652 |
+| `embed_pixie_rune` | GPU | 20.0% | 42.9% | 0.2810 | 62.9% | 0.4462 |
+| `embed_qwen3_4b_int8` | GPU | 8.6% | 31.4% | 0.1538 | 48.6% | 0.3581 |
+| **`embed_pixie_spell`** | **GPU** | **28.6%** | **60.0%** | **0.3900** | **82.9%** | **0.6019** |
+
+### 임베딩 × 대청킹(2000자) 조합 결과
+
+| 실험 | 환경 | Hit@1 HS6 | Hit@5 HS6 | MRR HS6 | Hit@5 HS4 | MRR HS4 |
+|------|------|-----------|-----------|---------|-----------|---------|
+| `large_kure_v1` | CPU | 25.7% | 54.3% | 0.3543 | 77.1% | 0.6048 |
+| `large_snowflake_ko` | CPU | 17.1% | 48.6% | 0.2690 | 71.4% | 0.4767 |
+| `large_pixie_rune` | GPU | 17.1% | 40.0% | 0.2510 | 60.0% | 0.4067 |
+| **`large_pixie_spell`** | **GPU** | **28.6%** | **57.1%** | **0.3829** | **77.1%** | **0.5576** |
+| **`large_qwen3_4b_int8`** | **GPU** | **28.6%** | **60.0%** | **0.3900** | **82.9%** | **0.6519** |
 
 **인사이트**:
-- kure_v1: MRR 최고 (랭킹 품질 우수) + Hit@1 최고 (1위 정확도 우수)
-- snowflake_ko: Hit@5 최고 (후보 포함률 우수) but Hit@1 낮음
-- 임베딩 교체가 청킹보다 훨씬 큰 영향 (최대 +14.3%p)
+- **pixie_spell(baseline 청킹)**: Hit@5 60.0%로 CPU KURE-v1(45.7%)을 크게 상회. GPU 모델 중 최고
+- **large_qwen3_4b_int8**: Hit@5 60.0%, MRR HS4=0.6519로 대청킹과의 시너지 탁월
+- **pixie_rune / qwen3_4b_int8(baseline)**: KURE-v1 CPU보다 낮음 — GPU가 항상 유리하지 않음
+- kure_v1(CPU)은 MRR·Hit@1에서 균형 잡힌 성능으로 최적 대비 비용 효율 가장 높음
 
 ---
 
@@ -342,20 +360,26 @@ large 전략은 5456/5462 청크(99.9%)에 hs_code 메타데이터 주입 성공
 
 ### 청킹 × 임베딩 조합
 
-| 실험 | 청킹 | 임베딩 | Hit@1 HS6 | Hit@5 HS6 | MRR HS6 | Hit@5 HS4 | MRR HS4 |
-|------|------|--------|-----------|-----------|---------|-----------|---------|
-| `baseline` | 1000자 | ko-sroberta | 22.9% | 37.1% | 0.2843 | 54.3% | 0.4329 |
-| `chunk_small` | 500자 | ko-sroberta | 22.9% | 34.3% | 0.2771 | 48.6% | 0.4129 |
-| `chunk_large` | 2000자 | ko-sroberta | 22.9% | 42.9% | 0.3057 | 62.9% | 0.4638 |
-| `chunk_sliding` | 300자/50% | ko-sroberta | 22.9% | 31.4% | 0.2629 | 45.7% | 0.3914 |
-| `chunk_token` | 256 tokens | ko-sroberta | 20.0% | 40.0% | 0.2867 | 54.3% | 0.4476 |
-| `chunk_paragraph` | 단락 분리 | ko-sroberta | 20.0% | 37.1% | 0.2700 | 54.3% | 0.4186 |
-| `chunk_page` | 페이지 단위 | ko-sroberta | 22.9% | 42.9% | 0.3057 | 62.9% | 0.4638 |
-| `embed_kure_v1` | 1000자 | KURE-v1 | **25.7%** | 45.7% | 0.3248 | **74.3%** | 0.5676 |
-| `embed_snowflake_ko` | 1000자 | snowflake-ko | 14.3% | 51.4% | 0.2743 | 68.6% | 0.4652 |
-| `large_snowflake_ko` | 2000자 | snowflake-ko | 17.1% | 48.6% | 0.2690 | 71.4% | 0.4767 |
-| `page_kure_v1` | 페이지 단위 | KURE-v1 | **25.7%** | 51.4% | 0.3471 | 74.3% | 0.5952 |
-| `large_kure_v1` | 2000자 | KURE-v1 | **25.7%** | 54.3% | 0.3543 | 77.1% | 0.6048 |
+| 실험 | 청킹 | 임베딩 | 환경 | Hit@1 HS6 | Hit@5 HS6 | MRR HS6 | Hit@5 HS4 | MRR HS4 |
+|------|------|--------|------|-----------|-----------|---------|-----------|---------|
+| `baseline` | 1000자 | ko-sroberta | CPU | 22.9% | 37.1% | 0.2843 | 54.3% | 0.4329 |
+| `chunk_small` | 500자 | ko-sroberta | CPU | 22.9% | 34.3% | 0.2771 | 48.6% | 0.4129 |
+| `chunk_large` | 2000자 | ko-sroberta | CPU | 22.9% | 42.9% | 0.3057 | 62.9% | 0.4638 |
+| `chunk_sliding` | 300자/50% | ko-sroberta | CPU | 22.9% | 31.4% | 0.2629 | 45.7% | 0.3914 |
+| `chunk_token` | 256 tokens | ko-sroberta | CPU | 20.0% | 40.0% | 0.2867 | 54.3% | 0.4476 |
+| `chunk_paragraph` | 단락 분리 | ko-sroberta | CPU | 20.0% | 37.1% | 0.2700 | 54.3% | 0.4186 |
+| `chunk_page` | 페이지 단위 | ko-sroberta | CPU | 22.9% | 42.9% | 0.3057 | 62.9% | 0.4638 |
+| `embed_kure_v1` | 1000자 | KURE-v1 | CPU | **25.7%** | 45.7% | 0.3248 | **74.3%** | 0.5676 |
+| `embed_snowflake_ko` | 1000자 | snowflake-ko | CPU | 14.3% | 51.4% | 0.2743 | 68.6% | 0.4652 |
+| `embed_pixie_rune` | 1000자 | PIXIE-Rune | GPU | 20.0% | 42.9% | 0.2810 | 62.9% | 0.4462 |
+| `embed_qwen3_4b_int8` | 1000자 | Qwen3-4B INT8 | GPU | 8.6% | 31.4% | 0.1538 | 48.6% | 0.3581 |
+| **`embed_pixie_spell`** | 1000자 | **PIXIE-Spell** | **GPU** | **28.6%** | **60.0%** | **0.3900** | **82.9%** | **0.6019** |
+| `large_snowflake_ko` | 2000자 | snowflake-ko | CPU | 17.1% | 48.6% | 0.2690 | 71.4% | 0.4767 |
+| `page_kure_v1` | 페이지 단위 | KURE-v1 | CPU | **25.7%** | 51.4% | 0.3471 | 74.3% | 0.5952 |
+| `large_kure_v1` | 2000자 | KURE-v1 | CPU | **25.7%** | 54.3% | 0.3543 | 77.1% | 0.6048 |
+| `large_pixie_rune` | 2000자 | PIXIE-Rune | GPU | 17.1% | 40.0% | 0.2510 | 60.0% | 0.4067 |
+| `large_pixie_spell` | 2000자 | PIXIE-Spell | GPU | **28.6%** | 57.1% | 0.3829 | 77.1% | 0.5576 |
+| **`large_qwen3_4b_int8`** | 2000자 | **Qwen3-4B INT8** | **GPU** | **28.6%** | **60.0%** | **0.3900** | **82.9%** | **0.6519** |
 
 ### 검색 후처리
 
@@ -486,10 +510,27 @@ baseline (37.1%)
 | 2 (보통) | 15 | 60.0% | 80.0% |
 | 3 (어려움) | 4 | 50.0% | 75.0% |
 
+### GPU 임베딩 실험 결과 요약 (8GB VRAM 환경)
+
+| 모델 | VRAM | Hit@5 HS6 | 순위 | 비고 |
+|------|------|-----------|------|------|
+| PIXIE-Spell (baseline 청킹) | ~3.4GB | 60.0% | 4위 | GPU 모델 중 최고 |
+| Qwen3-4B INT8 (large 청킹) | ~4GB | 60.0% | 5위 | large 청킹과 시너지 ↑ |
+| PIXIE-Spell (large 청킹) | ~3.4GB | 57.1% | 7위 | - |
+| KURE-v1 CPU (large 청킹) | 0 | 54.3% | 9위 | balanced 미적용 시 |
+| PIXIE-Rune (large 청킹) | ~4GB | 40.0% | 19위 | KURE-v1 CPU보다 낮음 |
+| Qwen3-4B INT8 (baseline 청킹) | ~4GB | 31.4% | 29위 | 짧은 청크에 취약 |
+
+**GPU 모델 인사이트**:
+- PIXIE-Spell은 balanced 듀얼 인덱스 없이도 60.0% 달성 — 단일 인덱스 기준 최고 성능
+- Qwen3-4B INT8은 large 청킹(2000자)과 결합 시 큰 폭 향상 (31.4% → 60.0%)
+- GPU가 항상 유리하지 않음: PIXIE-Rune(GPU)은 KURE-v1(CPU)보다 낮음
+- balanced 듀얼 인덱스를 GPU 모델에 적용하면 추가 향상 가능성 있음 (미실험)
+
 ### 한계 및 향후 개선 방향
 
 1. **임계점 존재**: 62.9%에서 정체 — HS 코드 자체의 분류 모호성 (가공 상태·재질에 따라 코드 분기)
-2. **더 강한 임베딩**: GPU 환경에서 Qwen3-Embedding, gte-Qwen2-7B 실험 시 추가 개선 여지
+2. **GPU 모델 + 듀얼 인덱스 조합 미실험**: pixie_spell + balanced_3pdf 조합 시 추가 향상 가능성
 3. **형태소 기반 BM25**: 공백 토큰화 대신 한국어 형태소 분석기 적용 → hybrid 효과 개선 가능
 4. **에이전트 레이어 강화**: HSCodeFinder reflection (확신 낮을 시 다른 키워드 재검색)
 5. **Layout-aware PDF 파싱**: LlamaParse 등 활용 시 표 구조 보존 → 품목 설명 품질 향상
