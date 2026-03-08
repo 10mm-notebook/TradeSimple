@@ -400,6 +400,20 @@ large 전략은 5456/5462 청크(99.9%)에 hs_code 메타데이터 주입 성공
 | `balanced_4pdf` | 4 | 25.7% | 62.9% | 0.3986 | 85.7% | 0.6548 |
 | `balanced_5pdf` | 5 (PDF-only) | 34.3% | 60.0% | 0.4595 | 88.6% | 0.7486 |
 
+### 듀얼 인덱스 균형 검색 (large+pixie_spell 기반)
+
+| 실험 | PDF 쿼터 | Hit@1 HS6 | Hit@5 HS6 | MRR HS6 | Hit@5 HS4 | MRR HS4 |
+|------|---------|-----------|-----------|---------|-----------|---------|
+| `large_pixie_spell` | 0 (단일) | 28.6% | 57.1% | 0.3829 | 77.1% | 0.5576 |
+| `balanced_1pdf_large_pixie` | 1 | 28.6% | 57.1% | 0.3829 | 77.1% | 0.5576 |
+| `balanced_2pdf_large_pixie` | 2 | 28.6% | 60.0% | 0.3900 | 82.9% | 0.5719 |
+| `balanced_3pdf_large_pixie` | 3 | 28.6% | 60.0% | 0.3962 | 77.1% | 0.5643 |
+| `balanced_4pdf_large_pixie` | 4 | 28.6% | 60.0% | 0.4176 | 80.0% | 0.6057 |
+| **`balanced_5pdf_large_pixie`** | 5 (PDF-only) | **37.1%** | **60.0%** | **0.4519** | **74.3%** | **0.6557** |
+
+> **결론**: balanced 적용 시 MRR은 0.3829 → 0.4519로 향상되지만 Hit@5는 60.0%에서 정체.
+> KURE-v1 balanced_3pdf (62.9%)를 넘지 못함 — **KURE-v1이 여전히 최고**.
+
 ### 쿼리 필드 변형 실험 (임베딩=baseline, 청킹=baseline)
 
 | 실험 | 쿼리 필드 | 확장 | Hit@5 HS6 | MRR HS6 |
@@ -525,7 +539,7 @@ baseline (37.1%)
 - PIXIE-Spell은 balanced 듀얼 인덱스 없이도 60.0% 달성 — 단일 인덱스 기준 최고 성능
 - Qwen3-4B INT8은 large 청킹(2000자)과 결합 시 큰 폭 향상 (31.4% → 60.0%)
 - GPU가 항상 유리하지 않음: PIXIE-Rune(GPU)은 KURE-v1(CPU)보다 낮음
-- balanced 듀얼 인덱스를 GPU 모델에 적용하면 추가 향상 가능성 있음 (미실험)
+- balanced 듀얼 인덱스를 pixie_spell에 적용해도 Hit@5 60.0%에서 정체 (KURE-v1 62.9%를 넘지 못함)
 
 ### 한계 및 향후 개선 방향
 
