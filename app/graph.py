@@ -70,6 +70,8 @@ async def input_validator_node(state: AgentState) -> Dict[str, Any]:
 9. processing_method: 가공방법 (예: 냉동, 훈제, 로스팅, 발효, 압착, 분무건조) — 없으면 NONE
 10. product_form: 제품형태 (예: 분말, 원단, 완성품, 원과, 알맹이, 캡슐) — 없으면 NONE
 11. main_material: 주요 소재/성분 (예: 리튬이온, 카카오 35% 이상, 다운 충전재, 천연 가죽) — 없으면 NONE
+12. hs_code: HS 코드 — 사용자가 직접 명시한 경우만 추출 (예: 8517.62-9090, 8517629090), 없으면 NONE
+13. tariff_rate: 관세율 (%) — 사용자가 직접 명시한 경우만 (예: 8.0), 없으면 NONE
 
 **단위 계산 예시 (중요!):**
 - "100그램당 5위안, 300kg 수입" → 300kg = 300,000g, 총 가격 = (300,000 / 100) × 5 = 15,000
@@ -98,7 +100,9 @@ CURRENCY: [통화코드]
 RAW_MATERIAL: [원재료 또는 NONE]
 PROCESSING_METHOD: [가공방법 또는 NONE]
 PRODUCT_FORM: [제품형태 또는 NONE]
-MAIN_MATERIAL: [주요 소재/성분 또는 NONE]"""),
+MAIN_MATERIAL: [주요 소재/성분 또는 NONE]
+HS_CODE: [HS 코드 또는 NONE]
+TARIFF_RATE: [관세율 숫자 또는 NONE]"""),
         ("human", "{user_message}")
     ])
     
@@ -196,6 +200,16 @@ MAIN_MATERIAL: [주요 소재/성분 또는 NONE]"""),
         elif "페소" in msg_lower:
             extracted["currency"] = "PHP"
     
+    # HS_CODE 추출 (사용자가 직접 명시한 경우)
+    match = re.search(r'HS_CODE:\s*([\d./-]+)', extraction_text)
+    if match and match.group(1).strip().upper() != 'NONE':
+        extracted["hs_code"] = match.group(1).strip()
+
+    # TARIFF_RATE 추출 (사용자가 직접 명시한 경우)
+    match = re.search(r'TARIFF_RATE:\s*([\d.]+)', extraction_text)
+    if match:
+        extracted["tariff_rate"] = float(match.group(1))
+
     # 상세 정보 추출 (선택 필드 — NONE이면 None으로)
     for field_key, label in [
         ("raw_material", "RAW_MATERIAL"),
@@ -234,6 +248,12 @@ MAIN_MATERIAL: [주요 소재/성분 또는 NONE]"""),
     if not currency:
         missing.append("currency")
     
+    # HS 코드가 사용자 입력에서 감지된 경우 → parallel_fetch(HITL) 스킵
+    hs_code_from_input = extracted.get("hs_code") or state.get("hs_code")
+    tariff_rate_from_input = extracted.get("tariff_rate")
+    if hs_code_from_input and state.get("current_phase") != "tax_calculator":
+        print(f"[Node] input_validator - HS 코드 감지: {hs_code_from_input} → parallel_fetch 스킵")
+
     update = {
         "item_name": item_name,
         "quantity": quantity,
@@ -248,10 +268,17 @@ MAIN_MATERIAL: [주요 소재/성분 또는 NONE]"""),
         "product_form": extracted.get("product_form") or state.get("product_form"),
         "main_material": extracted.get("main_material") or state.get("main_material"),
         "missing_info": missing if missing else None,
-        "current_phase": "request_info" if missing else "parallel_fetch",
+        "current_phase": "request_info" if missing else "supervisor",
     }
 
-    print(f"[Node] input_validator 완료: 추출됨={extracted}, 총외화={total_foreign_price}, 누락={missing}")
+    # HS 코드/관세율 (사용자 직접 입력 시 설정 — supervisor가 parallel_fetch 자동 스킵)
+    if hs_code_from_input:
+        update["hs_code"] = hs_code_from_input
+        update["hs_code_rationale"] = state.get("hs_code_rationale") or "사용자 직접 입력"
+    if tariff_rate_from_input is not None:
+        update["tariff_rate"] = tariff_rate_from_input
+
+    print(f"[Node] input_validator 완료: 추출됨={extracted}, 총외화={total_foreign_price}, 누락={missing}, hs_code={hs_code_from_input}")
     return update
 
 

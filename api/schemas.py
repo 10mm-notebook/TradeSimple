@@ -30,11 +30,18 @@ class HSCodeCandidate(BaseModel):
 
 
 class AnalyzeResponse(BaseModel):
-    """1단계: 입력 분석 응답 (HITL - HS 코드 선택 대기)"""
+    """
+    1단계: 입력 분석 응답
+
+    phase 값에 따라 세 가지 시나리오로 분기됩니다:
+    - hs_code_selection : HS 코드 후보 3개 반환, 사용자가 선택 후 /calculate 호출
+    - complete          : HS 코드가 입력에 이미 포함 → 전체 파이프라인 완료, 보고서 즉시 반환
+    - need_more_info    : 필수 정보 누락, missing_info 참고 후 재요청
+    """
     success: bool = Field(..., description="처리 성공 여부")
     session_id: str = Field(..., description="세션 ID")
-    phase: str = Field(..., description="현재 단계 (hs_code_selection / need_more_info / error)")
-    
+    phase: str = Field(..., description="현재 단계 (hs_code_selection / complete / need_more_info / error)")
+
     # 추출된 정보
     item_name: Optional[str] = Field(None, description="물품명")
     quantity: Optional[int] = Field(None, description="수량")
@@ -43,18 +50,29 @@ class AnalyzeResponse(BaseModel):
     price_unit: Optional[str] = Field(None, description="단가 기준")
     total_foreign_price: Optional[float] = Field(None, description="총 외화 금액")
     currency: Optional[str] = Field(None, description="통화")
-    
-    # HITL: HS 코드 후보 3개
+
+    # HITL: HS 코드 후보 3개 (phase=hs_code_selection 시)
     hs_code_candidates: Optional[List[HSCodeCandidate]] = Field(
-        None, description="HS 코드 후보 목록 (최대 3개)"
+        None, description="HS 코드 후보 목록 (최대 3개, phase=hs_code_selection 시 포함)"
     )
-    
-    # 환율 (병렬 조회 결과)
+
+    # 환율
     exchange_rate: Optional[float] = Field(None, description="적용 환율")
-    
+
     # 추가 정보 필요 시
     missing_info: Optional[List[str]] = Field(None, description="누락된 정보 목록")
-    
+
+    # phase=complete 시: 전체 계산 결과 + 보고서
+    hs_code: Optional[str] = Field(None, description="HS 코드 (phase=complete 시 포함)")
+    hs_code_rationale: Optional[str] = Field(None, description="HS 코드 분류 근거")
+    tariff_rate: Optional[float] = Field(None, description="관세율 (%)")
+    total_krw: Optional[float] = Field(None, description="총 원화 환산 금액")
+    tax_amount: Optional[float] = Field(None, description="예상 관세액")
+    vat_amount: Optional[float] = Field(None, description="예상 부가세")
+    total_cost: Optional[float] = Field(None, description="총 예상 비용 (관세 + 부가세 포함)")
+    report_content: Optional[str] = Field(None, description="보고서 내용")
+    report_paths: Optional[Dict[str, str]] = Field(None, description="보고서 파일 경로 (pdf/word/excel)")
+
     # 메시지
     message: Optional[str] = Field(None, description="안내 메시지")
     error: Optional[str] = Field(None, description="오류 메시지")

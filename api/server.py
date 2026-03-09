@@ -130,17 +130,16 @@ async def analyze_input(request: AnalyzeRequest):
             for c in candidates_raw[:3]
         ]
 
-        # request_info 메시지 추출
+        # request_info / 완료 메시지 추출
         last_msg = None
         for msg in reversed(result_state.get("messages", [])):
             if isinstance(msg, AIMessage):
                 last_msg = msg.content
                 break
 
-        return AnalyzeResponse(
-            success=True if phase != "request_info" else False,
+        # 공통 입력 필드
+        base_fields = dict(
             session_id=session_id,
-            phase="hs_code_selection" if phase == "hs_code_selection" else ("need_more_info" if phase == "request_info" else "analyzing"),
             item_name=result_state.get("item_name"),
             quantity=result_state.get("quantity"),
             quantity_unit=result_state.get("quantity_unit"),
@@ -148,10 +147,44 @@ async def analyze_input(request: AnalyzeRequest):
             price_unit=result_state.get("price_unit"),
             total_foreign_price=result_state.get("total_foreign_price"),
             currency=result_state.get("currency"),
-            hs_code_candidates=candidates if phase == "hs_code_selection" else None,
             exchange_rate=result_state.get("exchange_rate"),
+        )
+
+        # phase=complete: HS 코드가 입력에 포함되어 전체 파이프라인 완료
+        if phase == "complete":
+            tfp = result_state.get("total_foreign_price") or 0
+            er = result_state.get("exchange_rate") or 0
+            total_krw = tfp * er
+            tax_amount = result_state.get("tax_amount") or 0
+            vat_amount = (total_krw + tax_amount) * 0.10
+            total_cost = result_state.get("total_cost") or 0
+            return AnalyzeResponse(
+                success=True,
+                phase="complete",
+                hs_code=result_state.get("hs_code"),
+                hs_code_rationale=result_state.get("hs_code_rationale"),
+                tariff_rate=result_state.get("tariff_rate"),
+                total_krw=total_krw,
+                tax_amount=tax_amount,
+                vat_amount=vat_amount,
+                total_cost=total_cost,
+                report_content=result_state.get("report_content"),
+                report_paths=result_state.get("report_paths"),
+                message=last_msg or f"비용 계산이 완료되었습니다. 총 예상 비용: {total_cost:,.0f}원",
+                **base_fields,
+            )
+
+        return AnalyzeResponse(
+            success=phase != "request_info",
+            phase=(
+                "hs_code_selection" if phase == "hs_code_selection"
+                else "need_more_info" if phase in ("request_info", "waiting_input")
+                else "analyzing"
+            ),
+            hs_code_candidates=candidates if phase == "hs_code_selection" else None,
             missing_info=result_state.get("missing_info"),
-            message=last_msg or "HS 코드 후보를 찾았습니다. 가장 적합한 코드를 선택해주세요."
+            message=last_msg or "HS 코드 후보를 찾았습니다. 가장 적합한 코드를 선택해주세요.",
+            **base_fields,
         )
         
     except Exception as e:
@@ -320,31 +353,58 @@ async def analyze_input_stream(request: AnalyzeRequest):
                 last_msg = msg.content
                 break
 
-        final_payload = {
+        fs = final_state or {}
+        base_payload = {
             "done": True,
-            "success": phase != "request_info",
             "session_id": session_id,
-            "phase": (
-                "hs_code_selection" if phase == "hs_code_selection"
-                else "need_more_info" if phase in ("request_info", "waiting_input")
-                else "analyzing"
-            ),
-            "item_name": (final_state or {}).get("item_name"),
-            "quantity": (final_state or {}).get("quantity"),
-            "quantity_unit": (final_state or {}).get("quantity_unit"),
-            "unit_price": (final_state or {}).get("unit_price"),
-            "price_unit": (final_state or {}).get("price_unit"),
-            "total_foreign_price": (final_state or {}).get("total_foreign_price"),
-            "currency": (final_state or {}).get("currency"),
-            "exchange_rate": (final_state or {}).get("exchange_rate"),
-            "hs_code_candidates": candidates if phase == "hs_code_selection" else None,
-            "missing_info": (final_state or {}).get("missing_info"),
-            "message": last_msg or (
-                "HS 코드 후보를 찾았습니다. 가장 적합한 코드를 선택해주세요."
-                if phase == "hs_code_selection"
-                else "추가 정보가 필요합니다."
-            ),
+            "item_name": fs.get("item_name"),
+            "quantity": fs.get("quantity"),
+            "quantity_unit": fs.get("quantity_unit"),
+            "unit_price": fs.get("unit_price"),
+            "price_unit": fs.get("price_unit"),
+            "total_foreign_price": fs.get("total_foreign_price"),
+            "currency": fs.get("currency"),
+            "exchange_rate": fs.get("exchange_rate"),
         }
+
+        if phase == "complete":
+            tfp = fs.get("total_foreign_price") or 0
+            er = fs.get("exchange_rate") or 0
+            total_krw = tfp * er
+            tax_amount = fs.get("tax_amount") or 0
+            total_cost = fs.get("total_cost") or 0
+            final_payload = {
+                **base_payload,
+                "success": True,
+                "phase": "complete",
+                "hs_code": fs.get("hs_code"),
+                "hs_code_rationale": fs.get("hs_code_rationale"),
+                "tariff_rate": fs.get("tariff_rate"),
+                "total_krw": total_krw,
+                "tax_amount": tax_amount,
+                "vat_amount": (total_krw + tax_amount) * 0.10,
+                "total_cost": total_cost,
+                "report_content": fs.get("report_content"),
+                "report_paths": fs.get("report_paths"),
+                "message": last_msg or f"비용 계산이 완료되었습니다. 총 예상 비용: {total_cost:,.0f}원",
+            }
+        else:
+            final_payload = {
+                **base_payload,
+                "success": phase != "request_info",
+                "phase": (
+                    "hs_code_selection" if phase == "hs_code_selection"
+                    else "need_more_info" if phase in ("request_info", "waiting_input")
+                    else "analyzing"
+                ),
+                "hs_code_candidates": candidates if phase == "hs_code_selection" else None,
+                "missing_info": fs.get("missing_info"),
+                "message": last_msg or (
+                    "HS 코드 후보를 찾았습니다. 가장 적합한 코드를 선택해주세요."
+                    if phase == "hs_code_selection"
+                    else "추가 정보가 필요합니다."
+                ),
+            }
         yield f"data: {_json.dumps(final_payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
