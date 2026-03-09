@@ -15,67 +15,57 @@ OUT  = ROOT / "architecture.png"
 
 # ── Mermaid diagram ────────────────────────────────────────────────────
 MERMAID = """
-flowchart TD
-    subgraph INFRA ["🏗️  Infrastructure"]
-        direction LR
-        UI["Streamlit Web UI\\n:8501"]
-        API["FastAPI  :8000\\n/analyze   /calculate"]
-        LG["LangGraph\\nStateGraph(AgentState)"]
-        UI -->|HTTP / SSE| API --> LG
-    end
+flowchart LR
+    %% ── Left: main flow ──────────────────────────────────────────────
+    subgraph FLOW ["  Agent Workflow"]
+        direction TB
+        subgraph INFRA ["🏗  Infrastructure"]
+            direction LR
+            UI["Streamlit\\n:8501"] -->|"HTTP / SSE"| API["FastAPI  :8000\\n/analyze  /calculate"] --> LG["LangGraph\\nStateGraph"]
+        end
 
-    subgraph FLOW ["⚙️  LangGraph Agent Flow"]
-        ST(["●  START"])
-        ST --> IV
-
-        IV["input_validator\\nLLM — extract fields + detect HS code"]
+        INFRA --> ST(["● START"])
+        ST --> IV["input_validator\\nLLM — extract fields + detect HS code"]
 
         IV -->|"❌  missing fields"| RI["request_info\\nask for input"] --> E1(["END"])
-        IV -->|"✅  all fields OK"| SV
+        IV -->|"✅  all fields OK"| SV["supervisor\\nroute based on state"]
 
-        SV["supervisor\\nroute based on state"]
+        SV -->|"no HS code"| PF["parallel_fetch  (asyncio.gather)\\nHS candidates  +  exchange rate"]
+        SV -->|"HS code detected  →  skip HITL"| TC
 
-        SV -->|"no HS code"| PF
-        SV -->|"HS code detected\\n→ skip HITL"| TC
+        PF --> HITL{{"🧑  Human-in-the-Loop\\n3 HS code candidates\\nUser reviews & selects\\n─────────────────────\\ngraph interrupt\\nPOST /calculate to continue"}}
+        HITL -->|"selection done"| TC["tax_calculator\\ntariff rate  +  exchange rate  +  VAT (10%)"]
 
-        PF["parallel_fetch  (asyncio.gather)\\nHS candidates  +  exchange rate"]
-        PF --> HITL
-
-        HITL{{"🧑  Human-in-the-Loop\\n3 HS code candidates\\nUser reviews & selects\\n\\ngraph stops\\nPOST /calculate to continue"}}
-        HITL -->|"selection done"| TC
-
-        TC["tax_calculator\\ntariff rate  +  exchange rate  +  VAT (10%)"]
-        TC --> RW
-
-        RW["report_writer  (asyncio.gather)\\nPDF  /  Word  /  Excel"]
-        RW --> E2(["●  END"])
+        TC --> RW["report_writer  (asyncio.gather)\\nPDF  /  Word  /  Excel"]
+        RW --> E2(["● END"])
     end
 
-    subgraph TOOLS ["🛠️  Tools & External Services"]
-        direction LR
-        RAG["FAISS Dual-Index (RAG)\\nnlpai-lab/KURE-v1\\nHit@5: 37%→63%"]
-        LLM["LLM (OpenAI)\\nGPT-4o-mini / GPT-4o"]
+    %% ── Right: tools ─────────────────────────────────────────────────
+    subgraph TOOLS ["🛠  Tools & External Services"]
+        direction TB
+        RAG["FAISS Dual-Index  (RAG)\\nnlpai-lab/KURE-v1\\nHit@5: 37% → 63%"]
+        LLM["LLM  (OpenAI)\\nGPT-4o-mini  /  GPT-4o"]
         FX["Exchange Rate API\\nexchangerate-api.com"]
-        DB["Tariff DB (CSV)\\ntariff_by_hs.csv\\npandas lookup"]
+        DB["Tariff DB  (CSV)\\ntariff_by_hs.csv  ·  pandas"]
+        LS["LangSmith\\nTrace  ·  session_id = thread_id"]
+        RAG ~~~ LLM ~~~ FX ~~~ DB ~~~ LS
     end
 
-    INFRA --> FLOW
     FLOW ~~~ TOOLS
 
-    %% --- styles ---
-    classDef infra   fill:#1D4ED8,stroke:#1D4ED8,color:#fff,font-weight:bold
-    classDef node    fill:#4338CA,stroke:#4338CA,color:#fff,font-weight:bold
-    classDef hitl    fill:#FFFBEB,stroke:#D97706,stroke-width:2px,color:#92400E,font-weight:bold
-    classDef skip    fill:#F0FDF4,stroke:#15803D,stroke-width:2px,color:#15803D
-    classDef err     fill:#FEF2F2,stroke:#DC2626,stroke-width:1.5px,color:#DC2626,font-weight:bold
-    classDef tool    fill:#F8FAFC,stroke:#CBD5E1,color:#1E293B
+    %% ── Styles ───────────────────────────────────────────────────────
+    classDef infra    fill:#1D4ED8,stroke:#1D4ED8,color:#fff,font-weight:bold
+    classDef node     fill:#4338CA,stroke:#4338CA,color:#fff,font-weight:bold
+    classDef hitl     fill:#FFFBEB,stroke:#D97706,stroke-width:2.5px,color:#92400E,font-weight:bold
+    classDef err      fill:#FEF2F2,stroke:#DC2626,stroke-width:1.5px,color:#DC2626,font-weight:bold
+    classDef tool     fill:#F8FAFC,stroke:#94A3B8,color:#1E293B
     classDef terminal fill:#374151,stroke:#374151,color:#fff
 
     class UI,API,LG infra
     class IV,SV,PF,TC,RW node
     class HITL hitl
     class RI err
-    class RAG,LLM,FX,DB tool
+    class RAG,LLM,FX,DB,LS tool
     class ST,E1,E2 terminal
 """
 
@@ -100,9 +90,9 @@ HTML = """<!DOCTYPE html>
   mermaid.initialize({{
     startOnLoad: true,
     theme: 'default',
-    flowchart: {{ curve: 'basis', padding: 20, nodeSpacing: 50, rankSpacing: 60 }},
+    flowchart: {{ curve: 'basis', padding: 24, nodeSpacing: 50, rankSpacing: 80 }},
     themeVariables: {{
-      fontSize: '15px',
+      fontSize: '18px',
       fontFamily: 'Segoe UI, Arial, sans-serif'
     }}
   }});
@@ -132,7 +122,7 @@ async def render():
         args=['--no-sandbox', '--disable-setuid-sandbox'],
     )
     page = await browser.newPage()
-    await page.setViewport({'width': 1600, 'height': 2000})
+    await page.setViewport({'width': 2400, 'height': 1600, 'deviceScaleFactor': 3})
     await page.goto(f'file:///{tmp.name.replace(os.sep, "/")}',
                     waitUntil='networkidle0')
 
