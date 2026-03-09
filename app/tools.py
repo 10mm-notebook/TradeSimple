@@ -45,7 +45,9 @@ COMBINED_VS_PATH = "./vector_store/faiss_index"
 PDF_ONLY_VS_PATH = "./vector_store/faiss_index_pdf"
 
 # 검색 쿼리 확장 (LLM 기반) 사용 여부
-USE_LLM_QUERY_EXPANSION = True
+# ReAct 에이전트가 직접 쿼리를 제어하므로 expansion 비활성화
+# (활성화 시 ReAct가 자신의 쿼리가 내부에서 변환되는 사실을 모르고 중복 호출 발생)
+USE_LLM_QUERY_EXPANSION = False
 
 
 def reset_hs_code_search_limit() -> None:
@@ -141,51 +143,94 @@ def expand_hs_search_query(query: str) -> str:
         return query
 
 
-def _select_rag_snippet(text: str, hs_code: Optional[str], item_name: Optional[str]) -> str:
-    """RAG 원문에서 인용할 문장을 선택 (그대로 인용)."""
+def _score_doc_for_snippet(text: str, hs_code: Optional[str], item_name: Optional[str]) -> int:
+    """문서에 대한 스니펫 우선순위 점수 반환 (높을수록 우선)."""
+    score = 0
+    hs_digits = re.sub(r"\D", "", hs_code) if hs_code else ""
+    tokens = [t for t in re.split(r"\s+", item_name) if len(t) > 1] if item_name else []
+
+    if hs_digits and hs_digits in re.sub(r"\D", "", text):
+        score += 10  # HS 코드 포함 문서 최우선
+    if tokens:
+        matched = sum(1 for tok in tokens if tok in text)
+        score += matched * 2
+    # CSV 단일 행 (너무 짧으면 페널티)
+    if len(text.strip()) < 30:
+        score -= 5
+    return score
+
+
+def _extract_snippet_from_doc(text: str, hs_code: Optional[str], item_name: Optional[str],
+                               max_len: int = 300) -> str:
+    """
+    문서에서 HS 코드·물품명 주변 맥락을 포함한 스니펫 추출.
+    - HS 코드가 포함된 줄을 찾아 그 앞뒤 문장을 포함해 반환
+    - 없으면 전체 텍스트를 max_len 안에서 반환
+    """
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if not lines:
-        return text.strip()
+        return text.strip()[:max_len]
 
-    # HS 코드 포함 문장 우선
-    if hs_code:
-        hs_digits = re.sub(r"\D", "", hs_code)
-        for ln in lines:
-            if hs_digits and hs_digits in re.sub(r"\D", "", ln):
-                return ln
+    hs_digits = re.sub(r"\D", "", hs_code) if hs_code else ""
+    tokens = [t for t in re.split(r"\s+", item_name) if len(t) > 1] if item_name else []
 
-    # 물품명 토큰 포함 문장 우선
-    if item_name:
-        tokens = [t for t in re.split(r"\s+", item_name) if len(t) > 1]
-        for ln in lines:
+    # HS 코드 포함 줄 인덱스 탐색
+    anchor_idx = None
+    if hs_digits:
+        for i, ln in enumerate(lines):
+            if hs_digits in re.sub(r"\D", "", ln):
+                anchor_idx = i
+                break
+
+    # 물품명 토큰 포함 줄 (HS 코드 없을 때 차선)
+    if anchor_idx is None and tokens:
+        for i, ln in enumerate(lines):
             if any(tok in ln for tok in tokens):
-                return ln
+                anchor_idx = i
+                break
 
-    # 기본: 첫 문장 반환
-    return lines[0]
+    if anchor_idx is None:
+        anchor_idx = 0
+
+    # anchor 줄 기준 앞뒤 1줄 포함, max_len 이내
+    start = max(0, anchor_idx - 1)
+    end   = min(len(lines), anchor_idx + 3)
+    snippet = " ".join(lines[start:end])
+    return snippet[:max_len]
 
 
 def get_rag_snippet_for_candidate(item_name: str, hs_code: str, llm_snippet: Optional[str] = None) -> str:
     """
-    RAG 검색 결과에서 원문 그대로 인용할 문장을 반환합니다.
-    - LLM이 제시한 인용이 실제 DB 문장에 포함되면 우선 사용
-    - 아니면 검색 결과에서 가장 관련 문장을 자동 선택
+    RAG 검색 결과에서 관세청 DB 원문 스니펫을 반환합니다.
+    - PDF 청크를 우선 탐색 (HS 코드·물품명 맥락이 풍부)
+    - CSV 단일 행은 내용이 빈약하므로 낮은 우선순위
+    - LLM이 제시한 인용이 실제 DB에 포함되면 보강 재료로 활용
     """
     try:
-        docs = _balanced_search(f"{item_name} {hs_code}", k=5)
-        texts = [d.page_content for d in docs if getattr(d, "page_content", None)]
+        _load_stores()
+        docs: List = []
 
-        # LLM 인용이 실제 문서에 포함되면 그대로 사용
-        if llm_snippet:
-            for t in texts:
-                if llm_snippet in t:
-                    return llm_snippet
+        # PDF-only 인덱스 우선 (분류 기준 원문이 풍부)
+        if _pdf_store is not None:
+            docs = _pdf_store.similarity_search(f"{item_name} {hs_code}", k=5)
+        # PDF-only 없거나 결과 부족하면 통합 인덱스 보충
+        if len(docs) < 3 and _vector_store is not None:
+            docs += _vector_store.similarity_search(f"{item_name} {hs_code}", k=5)
 
-        # 문서에서 직접 문장 선택
-        for t in texts:
-            snippet = _select_rag_snippet(t, hs_code, item_name)
-            if snippet:
+        if not docs:
+            return llm_snippet or ""
+
+        # 스코어 기반 정렬 → 가장 관련성 높은 문서에서 스니펫 추출
+        scored = sorted(
+            docs,
+            key=lambda d: _score_doc_for_snippet(d.page_content, hs_code, item_name),
+            reverse=True,
+        )
+        for doc in scored:
+            snippet = _extract_snippet_from_doc(doc.page_content, hs_code, item_name)
+            if snippet and len(snippet) > 10:
                 return snippet
+
     except Exception:
         pass
 
@@ -212,12 +257,13 @@ def hs_code_search(query: str) -> str:
 
     print(f"[Tool] hs_code_search 실행: call={_hs_code_search_call_count}, query={query}")
 
-    # 하드 리밋: 에이전트 1회 실행당 최대 3회까지만 실제 검색 수행
-    if _hs_code_search_call_count > 3:
+    # 하드 리밋: 에이전트 1회 실행당 최대 5회까지만 실제 검색 수행
+    # (후보 3개 탐색을 위해 5회로 상향)
+    if _hs_code_search_call_count > 5:
         return (
             "[검색 제한 초과] 더 이상 hs_code_search 도구를 호출할 수 없습니다. "
             "반드시 지금까지 수집한 정보를 바탕으로 최종 답변을 작성하세요. "
-            "추가 도구 호출 없이 [결과] 형식으로 HS 코드와 관세율을 즉시 응답하세요."
+            "추가 도구 호출 없이 지정된 형식으로 즉시 응답하세요."
         )
 
     # 긴 문장은 핵심 키워드 2~3개로 자동 축약 (도메인 검색 팁 반영)

@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
-from app.tools import hs_code_search, tariff_search_by_hs_code, reset_hs_code_search_limit
+from app.tools import hs_code_search, tariff_search_by_hs_code, reset_hs_code_search_limit, get_rag_snippet_for_candidate
 
 
 # ReAct 에이전트용 시스템 프롬프트 (후보 3개 반환용 - 관세율 조회 없이 HS 코드만)
@@ -22,32 +22,37 @@ HS_CODE_FINDER_CANDIDATES_PROMPT = """당신은 HS 코드 분류 전문가입니
 - **tariff_search_by_hs_code 도구를 호출하지 마세요.** 관세율은 사용자가 HS 코드를 선택한 후에 별도로 조회됩니다.
 - hs_code_search 도구만 사용하여 HS 코드 후보를 찾으세요.
 
-## 검색 키워드 규칙
-- 물품명을 기본으로 하되, 원재료·가공방법·제품형태·주요 소재가 제공된 경우 이를 조합해 검색하세요.
+## 검색 전략 (중요!)
 - 핵심 단어 2~3개로 검색하세요 (예: "냉동 참치", "면 티셔츠 편성물", "리튬이온 배터리")
-- 여러 키워드로 검색해서 다양한 후보를 찾으세요.
+- **각 검색마다 반드시 다른 키워드 조합을 사용하세요.** 이전에 쓴 키워드를 그대로 반복하지 마세요.
+- 전략: ① 물품명+형태 → ② 소재+용도 → ③ 상위 카테고리 → ④ 영문 키워드
 
 ## 작업 순서
-1. hs_code_search로 물품의 HS 코드를 검색합니다.
-2. 검색 결과에서 **가장 적합한 후보 3개**를 정확도 순으로 정렬하여 반환합니다.
+1. 서로 다른 키워드로 최소 3회 hs_code_search를 실행합니다.
+2. 각 검색 결과에서 HS 코드를 수집한 뒤, **가장 적합한 후보 3개**를 정확도 순으로 반환합니다.
+3. 검색 결과가 충분하지 않아도 지금까지 찾은 코드로 최대한 3개를 채웁니다.
 
 ## 최종 응답 형식 (필수!)
-반드시 아래 형식으로 **3개 후보**를 응답하세요:
+반드시 아래 형식으로 **3개 후보**를 응답하세요.
+**RAG 근거** 항목에는 검색 결과 원문에서 해당 HS 코드 분류 기준과 가장 관련된 문장을 **그대로 복사**하세요. 절대 요약·재작성하지 마세요.
 
 [후보1] (가장 유력)
 - HS 코드: XXXX.XX-XXXX
 - 품명: [해당 HS 코드의 품명]
 - 적합도: [왜 이 코드가 적합한지 한 줄 설명]
+- RAG 근거: [검색 결과 원문 발췌 — 관련 분류 기준 문장 그대로 인용]
 
 [후보2]
 - HS 코드: XXXX.XX-XXXX
 - 품명: [해당 HS 코드의 품명]
 - 적합도: [왜 이 코드가 적합한지 한 줄 설명]
+- RAG 근거: [검색 결과 원문 발췌]
 
 [후보3]
 - HS 코드: XXXX.XX-XXXX
 - 품명: [해당 HS 코드의 품명]
 - 적합도: [왜 이 코드가 적합한지 한 줄 설명]
+- RAG 근거: [검색 결과 원문 발췌]
 """
 
 # ReAct 에이전트용 시스템 프롬프트
@@ -110,13 +115,16 @@ class HSCodeFinderAgent:
         # 비용과 레이트 리밋을 고려해 gpt-4o-mini 사용
         self.llm = llm or ChatOpenAI(model="gpt-4o-mini", temperature=0)
         self.tools = [hs_code_search, tariff_search_by_hs_code]
-        
-        # ReAct 에이전트 생성
-        # 설치된 langgraph 버전에서는 state_modifier 인자를 지원하지 않으므로,
-        # 시스템 프롬프트는 run()에서 SystemMessage로 주입한다.
+
+        # 단독 조회용 agent (HS 코드 검색 + 관세율 조회)
         self.agent = create_react_agent(
             model=self.llm,
             tools=self.tools,
+        )
+        # 후보 3개 탐색용 agent (hs_code_search만 — tariff 조회 불필요)
+        self.candidates_agent = create_react_agent(
+            model=self.llm,
+            tools=[hs_code_search],
         )
     
     def _build_detail_context(
@@ -165,9 +173,7 @@ class HSCodeFinderAgent:
             }
         """
         print(f"[HSCodeFinderAgent] ReAct 실행 시작: {item_name}")
-
-        # 도구 호출 카운터 리셋 (에이전트 1회 실행당 3회 제한 적용)
-        reset_hs_code_search_limit()
+        # reset은 외부(run_with_candidates 또는 graph 노드)에서 관리
 
         detail_ctx = self._build_detail_context(raw_material, processing_method, product_form, main_material)
         query_text = f"다음 물품의 HS 코드를 찾고 관세율을 조회해주세요: {item_name}"
@@ -248,7 +254,7 @@ class HSCodeFinderAgent:
             query_text += f"\n\n[상세 정보]\n{detail_ctx}"
 
         input_message = HumanMessage(content=query_text)
-        result = await self.agent.ainvoke(
+        result = await self.candidates_agent.ainvoke(
             {
                 "messages": [
                     SystemMessage(content=HS_CODE_FINDER_CANDIDATES_PROMPT),
@@ -268,7 +274,12 @@ class HSCodeFinderAgent:
         
         # 후보 3개 파싱
         candidates = self._extract_candidates(final_response)
-        
+
+        # rag_context가 비어 있는 후보: FAISS에서 원문 직접 추출 (LLM 인용 실패·환각 방지)
+        for c in candidates:
+            if not c.get("rag_context") and c["hs_code"] != "미확인":
+                c["rag_context"] = get_rag_snippet_for_candidate(item_name, c["hs_code"])
+
         # 후보가 3개 미만이면 기본 결과로 보충
         if len(candidates) < 3:
             default_result = await self.run(
@@ -282,10 +293,11 @@ class HSCodeFinderAgent:
                 found_codes = [c["hs_code"] for c in candidates]
                 if default_result["hs_code"] not in found_codes:
                     candidates.append({
-                        "hs_code": default_result["hs_code"],
+                        "hs_code":     default_result["hs_code"],
                         "tariff_rate": default_result["tariff_rate"],
-                        "품명": item_name,
-                        "적합도": default_result["rationale"] or "AI 추천",
+                        "품명":        item_name,
+                        "적합도":      default_result["rationale"] or "AI 추천",
+                        "rag_context": get_rag_snippet_for_candidate(item_name, default_result["hs_code"]),
                     })
         
         # 최소 1개는 있어야 함
@@ -304,32 +316,60 @@ class HSCodeFinderAgent:
         }
     
     def _extract_candidates(self, text: str) -> List[Dict[str, Any]]:
-        """텍스트에서 후보 3개 파싱."""
+        """텍스트에서 후보 3개 파싱.
+
+        1차: [후보1]/[후보2]/[후보3] 섹션 구조 파싱
+        2차(fallback): 텍스트 전체에서 HS 코드 패턴 직접 추출
+        """
         candidates = []
-        
-        # [후보1], [후보2], [후보3] 섹션 파싱
+
+        # 1차: [후보1], [후보2], [후보3] 섹션 파싱
         sections = re.split(r'\[후보[123]\]', text)
-        
-        for section in sections[1:]:  # 첫 번째는 헤더 이전
+        for section in sections[1:]:
             hs_code = self._extract_hs_code(section)
-            tariff_rate = self._extract_tariff_rate(section)
-            
-            # 품명 추출
-            품명_match = re.search(r'품명[:\s]*(.+?)(?:\n|$)', section)
-            품명 = 품명_match.group(1).strip() if 품명_match else ""
-            
-            # 적합도 추출
+            if not hs_code:
+                continue
+            품명_match   = re.search(r'품명[:\s]*(.+?)(?:\n|$)', section)
             적합도_match = re.search(r'적합도[:\s]*(.+?)(?:\n|$)', section)
-            적합도 = 적합도_match.group(1).strip() if 적합도_match else ""
-            
-            if hs_code:
-                candidates.append({
-                    "hs_code": hs_code,
-                    "tariff_rate": tariff_rate,
-                    "품명": 품명[:50] if 품명 else "",
-                    "적합도": 적합도[:100] if 적합도 else "",
-                })
-        
+            rag_match    = re.search(r'RAG\s*근거[:\s]*(.+?)(?:\n\s*\n|\n-|\Z)', section, re.DOTALL)
+            candidates.append({
+                "hs_code":    hs_code,
+                "tariff_rate": self._extract_tariff_rate(section),
+                "품명":       (품명_match.group(1).strip()[:50]   if 품명_match   else ""),
+                "적합도":     (적합도_match.group(1).strip()[:100] if 적합도_match else ""),
+                "rag_context": (rag_match.group(1).strip()[:300]  if rag_match   else ""),
+            })
+
+        if candidates:
+            return candidates
+
+        # 2차 fallback: 형식을 무시하고 HS 코드 패턴 전체 추출
+        found_codes = []
+        for pattern in [
+            r'\b([0-9]{4}\.[0-9]{2}-[0-9]{4})\b',
+            r'\b([0-9]{4}\.[0-9]{2}\.[0-9]{4})\b',
+        ]:
+            found_codes.extend(re.findall(pattern, text))
+
+        seen: set = set()
+        for raw in found_codes:
+            norm = self._normalize_hs_code(raw)
+            if norm in seen:
+                continue
+            seen.add(norm)
+            # 해당 코드 주변 텍스트에서 품명/적합도 추출 시도
+            idx = text.find(raw)
+            snippet = text[max(0, idx - 20):idx + 100] if idx != -1 else ""
+            품명_match = re.search(r'품명[:\s]*(.+?)(?:\n|$)', snippet)
+            적합도_match = re.search(r'적합도[:\s]*(.+?)(?:\n|$)', snippet)
+            candidates.append({
+                "hs_code":     norm,
+                "tariff_rate": 0.0,
+                "품명":        (품명_match.group(1).strip()[:50]   if 품명_match   else ""),
+                "적합도":      (적합도_match.group(1).strip()[:100] if 적합도_match else "AI 추천"),
+                "rag_context": "",
+            })
+
         return candidates
     
     def _normalize_hs_code(self, raw: str) -> str:
