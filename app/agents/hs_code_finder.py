@@ -275,10 +275,13 @@ class HSCodeFinderAgent:
         # 후보 3개 파싱
         candidates = self._extract_candidates(final_response)
 
-        # rag_context가 비어 있는 후보: FAISS에서 원문 직접 추출 (LLM 인용 실패·환각 방지)
+        # 항상 FAISS에서 원문 직접 추출 (LLM 인용은 fallback으로만 사용)
         for c in candidates:
-            if not c.get("rag_context") and c["hs_code"] != "미확인":
-                c["rag_context"] = get_rag_snippet_for_candidate(item_name, c["hs_code"])
+            if c["hs_code"] != "미확인":
+                llm_hint = c.get("rag_context") or None
+                c["rag_context"] = get_rag_snippet_for_candidate(
+                    item_name, c["hs_code"], llm_snippet=llm_hint
+                )
 
         # 후보가 3개 미만이면 기본 결과로 보충
         if len(candidates) < 3:

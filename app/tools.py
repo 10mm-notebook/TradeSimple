@@ -122,7 +122,7 @@ def expand_hs_search_query(query: str) -> str:
     - 과장/허위 정보 금지
     """
     if not USE_LLM_QUERY_EXPANSION:
-        return query
+        return ""
     try:
         llm = get_query_expander()
         prompt = (
@@ -201,26 +201,40 @@ def _extract_snippet_from_doc(text: str, hs_code: Optional[str], item_name: Opti
 
 def get_rag_snippet_for_candidate(item_name: str, hs_code: str, llm_snippet: Optional[str] = None) -> str:
     """
-    RAG 검색 결과에서 관세청 DB 원문 스니펫을 반환합니다.
-    - PDF 청크를 우선 탐색 (HS 코드·물품명 맥락이 풍부)
-    - CSV 단일 행은 내용이 빈약하므로 낮은 우선순위
-    - LLM이 제시한 인용이 실제 DB에 포함되면 보강 재료로 활용
+    관세청 DB(PDF 청크) 원문 스니펫을 반환합니다.
+    1순위: PDF-only 인덱스에서 hs_code 메타데이터 필터 검색 (해당 세번의 분류 기준 원문)
+    2순위: PDF-only 인덱스 일반 유사도 검색
+    3순위: 통합 인덱스 보충
+    최후: llm_snippet
     """
     try:
         _load_stores()
         docs: List = []
+        hs_norm = re.sub(r"\D", "", hs_code) if hs_code else ""
 
-        # PDF-only 인덱스 우선 (분류 기준 원문이 풍부)
-        if _pdf_store is not None:
-            docs = _pdf_store.similarity_search(f"{item_name} {hs_code}", k=5)
-        # PDF-only 없거나 결과 부족하면 통합 인덱스 보충
+        # 1. PDF-only + hs_code 메타데이터 필터 (해당 세번 청크 직접 탐색)
+        if _pdf_store is not None and hs_norm:
+            try:
+                filtered = _pdf_store.similarity_search(
+                    item_name, k=5, filter={"hs_code": hs_norm}
+                )
+                if filtered:
+                    docs = filtered
+            except Exception:
+                pass
+
+        # 2. 필터 결과 없으면 PDF-only 일반 검색
+        if not docs and _pdf_store is not None:
+            docs = _pdf_store.similarity_search(item_name, k=5)
+
+        # 3. 여전히 부족하면 통합 인덱스 보충
         if len(docs) < 3 and _vector_store is not None:
-            docs += _vector_store.similarity_search(f"{item_name} {hs_code}", k=5)
+            docs += _vector_store.similarity_search(item_name, k=5)
 
         if not docs:
             return llm_snippet or ""
 
-        # 스코어 기반 정렬 → 가장 관련성 높은 문서에서 스니펫 추출
+        # 스코어 기반 정렬 (HS 코드 일치 우선) → 가장 관련 문서에서 스니펫 추출
         scored = sorted(
             docs,
             key=lambda d: _score_doc_for_snippet(d.page_content, hs_code, item_name),
@@ -228,7 +242,7 @@ def get_rag_snippet_for_candidate(item_name: str, hs_code: str, llm_snippet: Opt
         )
         for doc in scored:
             snippet = _extract_snippet_from_doc(doc.page_content, hs_code, item_name)
-            if snippet and len(snippet) > 10:
+            if snippet and len(snippet) > 20:
                 return snippet
 
     except Exception:
